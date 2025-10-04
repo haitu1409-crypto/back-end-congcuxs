@@ -27,22 +27,39 @@ app.use(helmet({
 // CORS configuration
 const allowedOrigins = process.env.FRONTEND_URL 
     ? process.env.FRONTEND_URL.split(',')
-    : ['*'];
+    : [
+        'https://www.taodandewukong.pro',
+        'https://taodandewukong.pro',
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:3002',
+        'http://localhost:3003',
+        'http://localhost:3004'
+    ];
+
+console.log('🌐 Allowed CORS Origins:', allowedOrigins);
 
 app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
         
+        console.log('🔍 Request Origin:', origin);
+        console.log('✅ Checking against allowed origins:', allowedOrigins);
+        
         if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+            console.log('✅ CORS allowed for:', origin);
             return callback(null, true);
         }
         
-        return callback(new Error('Not allowed by CORS'));
+        console.log('❌ CORS blocked for:', origin);
+        return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    preflightContinue: false,
+    optionsSuccessStatus: 200
 }));
 
 // Compression middleware để giảm kích thước response
