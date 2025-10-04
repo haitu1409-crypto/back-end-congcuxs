@@ -1,0 +1,34 @@
+{
+  "name": "dande-api",
+  "description": "API Backend cho ứng dụng tạo dàn đề - Tôn Ngộ Không",
+  "repository": "https://github.com/your-username/your-repo",
+  "logo": "https://your-logo-url.com/logo.png",
+  "keywords": ["node", "express", "api", "lottery", "dan-de", "vietnam"],
+  "image": "heroku/nodejs",
+  "stack": "heroku-22",
+  "env": {
+    "NODE_ENV": {
+      "description": "Environment",
+      "value": "production"
+    },
+    "PORT": {
+      "description": "Port to run the server on",
+      "value": "5000"
+    },
+    "FRONTEND_URL": {
+      "description": "Frontend URL for CORS",
+      "value": "https://your-frontend.vercel.app"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "free"
+    }
+  },
+  "addons": [
+    {
+      "plan": "heroku-postgresql:hobby-dev"
+    }
+  ]
+}
