@@ -12,11 +12,9 @@ class Database {
 
     async connect() {
         try {
-            const mongoUri = process.env.MONGODB_URI || 'mongodb://localhost:27017/dande_thongke';
+            const mongoUri = process.env.MONGODB_URI || process.env.DATABASE_URL || 'mongodb://localhost:27017/dande_thongke';
 
             const options = {
-                useNewUrlParser: true,
-                useUnifiedTopology: true,
                 maxPoolSize: 10,
                 serverSelectionTimeoutMS: 5000,
                 socketTimeoutMS: 45000,
@@ -45,6 +43,8 @@ class Database {
             return this.connection;
         } catch (error) {
             console.error('❌ Không thể kết nối MongoDB:', error.message);
+            console.error('🔍 MongoDB URI:', mongoUri.replace(/\/\/.*@/, '//***:***@')); // Hide credentials
+            console.error('💡 Hãy kiểm tra MONGODB_URI environment variable');
             throw error;
         }
     }
