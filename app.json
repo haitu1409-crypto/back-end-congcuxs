@@ -17,7 +17,7 @@
     },
     "FRONTEND_URL": {
       "description": "Frontend URL for CORS",
-      "value": "https://your-frontend.vercel.app"
+      "value": "https://taodandewukong.pro,https://www.taodandewukong.pro"
     }
   },
   "formation": {

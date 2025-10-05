@@ -56,11 +56,40 @@ app.use(cors({
         return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
+    allowedHeaders: [
+        'Content-Type',
+        'Authorization',
+        'X-Requested-With',
+        'Accept',
+        'Origin',
+        'Cache-Control',
+        'X-Requested-With'
+    ],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
     preflightContinue: false,
-    optionsSuccessStatus: 200
+    optionsSuccessStatus: 204
 }));
+
+// Additional CORS headers for preflight requests
+app.options('*', cors());
+
+// Manual CORS headers for all responses (backup)
+app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.header('Access-Control-Allow-Origin', origin);
+    }
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control');
+    res.header('Access-Control-Allow-Credentials', 'true');
+
+    if (req.method === 'OPTIONS') {
+        res.sendStatus(204);
+        return;
+    }
+    next();
+});
 
 // Compression middleware để giảm kích thước response
 app.use(compression());
@@ -97,6 +126,30 @@ app.get('/health', (req, res) => {
         memory: process.memoryUsage(),
         version: process.version
     });
+});
+
+// Debug endpoint to test database connection
+app.get('/debug/db', async (req, res) => {
+    try {
+        const database = require('./src/config/database');
+        const status = database.getConnectionStatus();
+        const ping = await database.ping();
+
+        res.status(200).json({
+            success: true,
+            database: {
+                status: status,
+                ping: ping,
+                connected: status.state === 'connected'
+            }
+        });
+    } catch (error) {
+        res.status(500).json({
+            success: false,
+            error: error.message,
+            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
 });
 
 // Root endpoint for Render health check
