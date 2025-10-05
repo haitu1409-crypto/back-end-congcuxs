@@ -25,7 +25,7 @@ app.use(helmet({
 }));
 
 // CORS configuration
-const allowedOrigins = process.env.FRONTEND_URL 
+const allowedOrigins = process.env.FRONTEND_URL
     ? process.env.FRONTEND_URL.split(',')
     : [
         'https://www.taodandewukong.pro',
@@ -43,15 +43,15 @@ app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
-        
+
         console.log('🔍 Request Origin:', origin);
         console.log('✅ Checking against allowed origins:', allowedOrigins);
-        
+
         if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
             console.log('✅ CORS allowed for:', origin);
             return callback(null, true);
         }
-        
+
         console.log('❌ CORS blocked for:', origin);
         return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
@@ -93,7 +93,18 @@ app.get('/health', (req, res) => {
         status: 'OK',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        environment: process.env.NODE_ENV || 'development'
+        environment: process.env.NODE_ENV || 'development',
+        memory: process.memoryUsage(),
+        version: process.version
+    });
+});
+
+// Root endpoint for Render health check
+app.get('/', (req, res) => {
+    res.status(200).json({
+        message: 'Dàn Đề API is running',
+        timestamp: new Date().toISOString(),
+        status: 'OK'
     });
 });
 
@@ -124,14 +135,27 @@ app.use((err, req, res, next) => {
 // Start server
 const startServer = async () => {
     try {
-        // Kết nối MongoDB
-        await database.connect();
+        console.log('🔄 Đang khởi động server...');
+
+        // Kết nối MongoDB với timeout
+        const connectWithTimeout = async () => {
+            const timeout = new Promise((_, reject) => {
+                setTimeout(() => reject(new Error('MongoDB connection timeout')), 30000);
+            });
+
+            const connect = database.connect();
+            return Promise.race([connect, timeout]);
+        };
+
+        await connectWithTimeout();
+        console.log('✅ Kết nối MongoDB thành công');
 
         // Khởi động server
-        const server = app.listen(PORT, () => {
+        const server = app.listen(PORT, '0.0.0.0', () => {
             console.log(`🚀 Server đang chạy trên port ${PORT}`);
             console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
             console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
+            console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
         });
 
         // Graceful shutdown
@@ -153,8 +177,20 @@ const startServer = async () => {
             });
         });
 
+        // Handle uncaught exceptions
+        process.on('uncaughtException', (error) => {
+            console.error('❌ Uncaught Exception:', error);
+            process.exit(1);
+        });
+
+        process.on('unhandledRejection', (reason, promise) => {
+            console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+            process.exit(1);
+        });
+
     } catch (error) {
         console.error('❌ Không thể khởi động server:', error);
+        console.error('Stack trace:', error.stack);
         process.exit(1);
     }
 };
