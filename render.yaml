@@ -11,8 +11,12 @@ services:
       - key: PORT
         value: 5000
       - key: FRONTEND_URL
-        value: https://your-frontend.vercel.app
+        value: https://taodandewukong.pro,https://www.taodandewukong.pro
       - key: RATE_LIMIT_WINDOW_MS
         value: 900000
       - key: RATE_LIMIT_MAX_REQUESTS
         value: 100
+      - key: MONGODB_URI
+        value: mongodb+srv://your-username:your-password@cluster.mongodb.net/dande-db
+      - key: MONGODB_DB_NAME
+        value: dande-db
