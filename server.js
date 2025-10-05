@@ -26,7 +26,7 @@ app.use(helmet({
 
 // CORS configuration
 const allowedOrigins = process.env.FRONTEND_URL
-    ? process.env.FRONTEND_URL.split(',')
+    ? process.env.FRONTEND_URL.split(',').map(origin => origin.trim())
     : [
         'https://www.taodandewukong.pro',
         'https://taodandewukong.pro',
