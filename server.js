@@ -13,6 +13,8 @@ const rateLimit = require('express-rate-limit');
 
 const danDeRoutes = require('./src/routes/dande.routes');
 const thongKeRoutes = require('./src/routes/thongke.routes');
+const articleRoutes = require('./src/routes/article.routes');
+const uploadRoutes = require('./src/routes/upload.routes');
 const database = require('./src/config/database');
 
 const app = express();
@@ -38,7 +40,7 @@ const allowedOrigins = process.env.FRONTEND_URL
     ];
 
 // Add wildcard support for development
-if (process.env.NODE_ENV === 'development') {
+if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
     allowedOrigins.push('*');
 }
 
@@ -64,20 +66,20 @@ app.use(cors({
             if (allowedOrigin.includes('.')) {
                 const domain = allowedOrigin.replace(/^https?:\/\//, '');
                 const requestDomain = origin.replace(/^https?:\/\//, '');
-                
+
                 // Exact match
                 if (requestDomain === domain) return true;
-                
+
                 // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
                 if (requestDomain.endsWith('.' + domain)) return true;
-                
+
                 // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
                 if (domain.endsWith('.' + requestDomain)) return true;
-                
+
                 // Check if both are subdomains of the same root domain
                 const requestParts = requestDomain.split('.');
                 const domainParts = domain.split('.');
-                
+
                 if (requestParts.length >= 2 && domainParts.length >= 2) {
                     const requestRoot = requestParts.slice(-2).join('.');
                     const domainRoot = domainParts.slice(-2).join('.');
@@ -122,43 +124,43 @@ app.options('*', cors());
 // Manual CORS headers for all responses (backup)
 app.use((req, res, next) => {
     const origin = req.headers.origin;
-    
+
     // Check if origin is allowed
-    const isAllowedOrigin = allowedOrigins.includes('*') || 
-                           allowedOrigins.includes(origin) ||
-                           (origin && allowedOrigins.some(allowedOrigin => {
-                               if (allowedOrigin.includes('.')) {
-                                   const domain = allowedOrigin.replace(/^https?:\/\//, '');
-                                   const requestDomain = origin.replace(/^https?:\/\//, '');
-                                   
-                                   // Exact match
-                                   if (requestDomain === domain) return true;
-                                   
-                                   // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
-                                   if (requestDomain.endsWith('.' + domain)) return true;
-                                   
-                                   // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
-                                   if (domain.endsWith('.' + requestDomain)) return true;
-                                   
-                                   // Check if both are subdomains of the same root domain
-                                   const requestParts = requestDomain.split('.');
-                                   const domainParts = domain.split('.');
-                                   
-                                   if (requestParts.length >= 2 && domainParts.length >= 2) {
-                                       const requestRoot = requestParts.slice(-2).join('.');
-                                       const domainRoot = domainParts.slice(-2).join('.');
-                                       return requestRoot === domainRoot;
-                                   }
-                               }
-                               return false;
-                           }));
+    const isAllowedOrigin = allowedOrigins.includes('*') ||
+        allowedOrigins.includes(origin) ||
+        (origin && allowedOrigins.some(allowedOrigin => {
+            if (allowedOrigin.includes('.')) {
+                const domain = allowedOrigin.replace(/^https?:\/\//, '');
+                const requestDomain = origin.replace(/^https?:\/\//, '');
+
+                // Exact match
+                if (requestDomain === domain) return true;
+
+                // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
+                if (requestDomain.endsWith('.' + domain)) return true;
+
+                // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
+                if (domain.endsWith('.' + requestDomain)) return true;
+
+                // Check if both are subdomains of the same root domain
+                const requestParts = requestDomain.split('.');
+                const domainParts = domain.split('.');
+
+                if (requestParts.length >= 2 && domainParts.length >= 2) {
+                    const requestRoot = requestParts.slice(-2).join('.');
+                    const domainRoot = domainParts.slice(-2).join('.');
+                    return requestRoot === domainRoot;
+                }
+            }
+            return false;
+        }));
 
     if (isAllowedOrigin && origin) {
         res.header('Access-Control-Allow-Origin', origin);
     } else if (allowedOrigins.includes('*')) {
         res.header('Access-Control-Allow-Origin', '*');
     }
-    
+
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Access-Control-Request-Method, Access-Control-Request-Headers');
     res.header('Access-Control-Allow-Credentials', 'true');
@@ -170,7 +172,7 @@ app.use((req, res, next) => {
         res.status(204).end();
         return;
     }
-    
+
     next();
 });
 
@@ -247,6 +249,11 @@ app.get('/', (req, res) => {
 // API routes
 app.use('/api/dande', danDeRoutes);
 app.use('/api/thongke', thongKeRoutes);
+app.use('/api/articles', articleRoutes);
+app.use('/api', uploadRoutes);
+
+// Serve static files from uploads directory
+app.use('/uploads', express.static('uploads'));
 
 // 404 handler
 app.use('*', (req, res) => {
