@@ -340,7 +340,7 @@ const startServer = async () => {
         const connectMongoDBInBackground = async () => {
             try {
                 console.log('🔄 Đang kết nối MongoDB trong background...');
-                
+
                 const connectWithTimeout = async () => {
                     const timeout = new Promise((_, reject) => {
                         setTimeout(() => reject(new Error('MongoDB connection timeout')), 15000);
@@ -355,7 +355,7 @@ const startServer = async () => {
             } catch (error) {
                 console.warn('⚠️ MongoDB connection failed:', error.message);
                 console.log('🔄 Server vẫn hoạt động bình thường, sẽ thử kết nối lại...');
-                
+
                 // Retry connection after 30 seconds
                 setTimeout(connectMongoDBInBackground, 30000);
             }
