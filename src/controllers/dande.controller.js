@@ -12,15 +12,37 @@ const generateDanDe = async (req, res) => {
     try {
         const { quantity, combinationNumbers, excludeNumbers, excludeDoubles, specialSets, touches, sums } = req.body;
 
-        // Validation
-        if (!quantity || typeof quantity !== 'number') {
+        // Debug logging
+        console.log('🚀 API Request received:', {
+            quantity: quantity,
+            quantityType: typeof quantity,
+            combinationNumbers: combinationNumbers,
+            excludeNumbers: excludeNumbers,
+            excludeDoubles: excludeDoubles,
+            specialSets: specialSets,
+            touches: touches,
+            sums: sums
+        });
+
+        // Validation - cho phép cả number và string
+        if (!quantity || (typeof quantity !== 'number' && typeof quantity !== 'string')) {
             return res.status(400).json({
                 success: false,
                 message: 'Số lượng dàn không hợp lệ'
             });
         }
 
-        if (quantity < 1 || quantity > 50) {
+        // Convert to number if it's a string
+        const quantityNum = typeof quantity === 'string' ? parseInt(quantity, 10) : quantity;
+
+        if (isNaN(quantityNum)) {
+            return res.status(400).json({
+                success: false,
+                message: 'Số lượng dàn phải là số'
+            });
+        }
+
+        if (quantityNum < 1 || quantityNum > 50) {
             return res.status(400).json({
                 success: false,
                 message: 'Số lượng dàn phải từ 1 đến 50'
@@ -54,7 +76,7 @@ const generateDanDe = async (req, res) => {
                     message: 'Thêm số mong muốn không được quá 40 số'
                 });
             }
-            
+
             // Kiểm tra xung đột với số loại bỏ và kép bằng
             let availableNumbers = 100;
             if (excludeDoubles) {
@@ -63,7 +85,7 @@ const generateDanDe = async (req, res) => {
             if (excludeNumbers && excludeNumbers.length > 0) {
                 availableNumbers -= excludeNumbers.length; // Loại bỏ số mong muốn
             }
-            
+
             if (combinationNumbers.length > availableNumbers) {
                 return res.status(400).json({
                     success: false,
@@ -220,7 +242,7 @@ const generateDanDe = async (req, res) => {
         }
 
         // Generate dàn đề
-        const result = danDeService.generateRandomDanDe(quantity, combinationNumbers, excludeNumbers, excludeDoubles, specialSets, touches, sums);
+        const result = danDeService.generateRandomDanDe(quantityNum, combinationNumbers, excludeNumbers, excludeDoubles, specialSets, touches, sums);
 
         res.status(200).json({
             success: true,
