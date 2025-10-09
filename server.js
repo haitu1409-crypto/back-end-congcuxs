@@ -16,7 +16,7 @@ const thongKeRoutes = require('./src/routes/thongke.routes');
 const articleRoutes = require('./src/routes/article.routes');
 const uploadRoutes = require('./src/routes/upload.routes');
 const database = require('./src/config/database');
-const { keepAliveMiddleware, keepAliveManager } = require('./src/middleware/keepAlive');
+// Keep-alive middleware removed for Pro version
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -180,8 +180,7 @@ app.use((req, res, next) => {
 // Compression middleware để giảm kích thước response
 app.use(compression());
 
-// Keep-alive middleware để tránh cold start
-app.use(keepAliveMiddleware);
+// Keep-alive middleware removed for Pro version
 
 // Body parser middleware
 app.use(express.json({ limit: '10mb' }));
@@ -241,14 +240,7 @@ app.get('/ping', (req, res) => {
     });
 });
 
-// Keep-alive status endpoint
-app.get('/keepalive/status', (req, res) => {
-    res.status(200).json({
-        success: true,
-        data: keepAliveManager.getStatus(),
-        message: 'Keep-alive status retrieved successfully'
-    });
-});
+// Keep-alive endpoint removed for Pro version
 
 // Utility function to format uptime
 function formatUptime(seconds) {

@@ -1,5 +1,6 @@
 /**
- * Optimized startup script for Render deployment
+ * Simplified Server for Render Pro
+ * No need for complex cold start prevention
  */
 
 require('dotenv').config();
@@ -7,11 +8,18 @@ const express = require('express');
 const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
+const morgan = require('morgan');
+
+const danDeRoutes = require('./src/routes/dande.routes');
+const thongKeRoutes = require('./src/routes/thongke.routes');
+const articleRoutes = require('./src/routes/article.routes');
+const uploadRoutes = require('./src/routes/upload.routes');
+const database = require('./src/config/database');
 
 const app = express();
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 5000;
 
-// Basic middleware setup
+// Security middleware
 app.use(helmet({
     contentSecurityPolicy: false,
     crossOriginEmbedderPolicy: false
@@ -43,8 +51,6 @@ app.use(cors({
         if (!origin) return callback(null, true);
 
         console.log('🔍 Request Origin:', origin);
-        console.log('✅ Checking against allowed origins:', allowedOrigins);
-        console.log('🔧 Environment:', process.env.NODE_ENV);
 
         // Check exact match or wildcard
         if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
@@ -165,18 +171,42 @@ app.use((req, res, next) => {
     next();
 });
 
+// Compression middleware
 app.use(compression());
+
+// Body parser middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
-// Health check endpoints (essential for Render)
+// Logging middleware
+if (process.env.NODE_ENV === 'development') {
+    app.use(morgan('dev'));
+} else {
+    app.use(morgan('combined'));
+}
+
+// Rate limiting
+const rateLimit = require('express-rate-limit');
+const limiter = rateLimit({
+    windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
+    message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau.',
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
+app.use('/api/', limiter);
+
+// Health check endpoints
 app.get('/health', (req, res) => {
     res.status(200).json({
         status: 'OK',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         environment: process.env.NODE_ENV || 'production',
-        service: 'dande-api'
+        memory: process.memoryUsage(),
+        version: process.version,
+        service: 'dande-api-pro'
     });
 });
 
@@ -185,7 +215,7 @@ app.get('/healthz', (req, res) => {
         status: 'healthy',
         timestamp: new Date().toISOString(),
         uptime: Math.floor(process.uptime()),
-        service: 'dande-api'
+        service: 'dande-api-pro'
     });
 });
 
@@ -200,99 +230,96 @@ app.get('/ping', (req, res) => {
 // Root endpoint
 app.get('/', (req, res) => {
     res.status(200).json({
-        message: 'Dàn Đề API is running',
+        message: 'Dàn Đề API Pro is running',
         timestamp: new Date().toISOString(),
         status: 'OK',
-        version: '1.0.0'
+        version: '2.0.0',
+        plan: 'pro'
     });
 });
 
-// Load routes dynamically (with error handling)
-let routesLoaded = false;
+// API routes
+app.use('/api/dande', danDeRoutes);
+app.use('/api/thongke', thongKeRoutes);
+app.use('/api/articles', articleRoutes);
+app.use('/api', uploadRoutes);
 
-const loadRoutes = async () => {
-    try {
-        console.log('🔄 Loading API routes...');
-
-        const danDeRoutes = require('./src/routes/dande.routes');
-        const thongKeRoutes = require('./src/routes/thongke.routes');
-        const articleRoutes = require('./src/routes/article.routes');
-        const uploadRoutes = require('./src/routes/upload.routes');
-
-        app.use('/api/dande', danDeRoutes);
-        app.use('/api/thongke', thongKeRoutes);
-        app.use('/api/articles', articleRoutes);
-        app.use('/api', uploadRoutes);
-
-        // Serve static files
-        app.use('/uploads', express.static('uploads'));
-
-        console.log('✅ API routes loaded successfully');
-        routesLoaded = true;
-    } catch (error) {
-        console.error('❌ Failed to load routes:', error.message);
-        console.log('🔄 Will retry in 10 seconds...');
-        setTimeout(loadRoutes, 10000);
-    }
-};
+// Serve static files from uploads directory
+app.use('/uploads', express.static('uploads'));
 
 // 404 handler
 app.use('*', (req, res) => {
     res.status(404).json({
         success: false,
         message: 'Endpoint không tồn tại',
-        path: req.originalUrl,
-        routesLoaded: routesLoaded
+        path: req.originalUrl
     });
 });
 
 // Global error handler
 app.use((err, req, res, next) => {
     console.error('Error:', err);
+
     res.status(err.status || 500).json({
         success: false,
         message: err.message || 'Lỗi server nội bộ',
-        routesLoaded: routesLoaded
+        ...(process.env.NODE_ENV === 'development' && { stack: err.stack })
     });
 });
 
-// Start server immediately
-const server = app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 Server started on port ${PORT}`);
-    console.log(`📝 Environment: ${process.env.NODE_ENV || 'production'}`);
-    console.log(`✅ Health check: http://localhost:${PORT}/health`);
-    console.log(`✅ Root endpoint: http://localhost:${PORT}/`);
-});
+// Start server
+const startServer = async () => {
+    try {
+        console.log('🔄 Đang khởi động server Pro...');
 
-// Load routes in background
-loadRoutes();
+        // Connect to MongoDB (can wait since Pro plan is always-on)
+        await database.connect();
+        console.log('✅ Kết nối MongoDB thành công');
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    console.log('SIGTERM received: shutting down gracefully');
-    server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
-    });
-});
+        // Start server
+        const server = app.listen(PORT, '0.0.0.0', () => {
+            console.log(`🚀 Server Pro đang chạy trên port ${PORT}`);
+            console.log(`📝 Environment: ${process.env.NODE_ENV || 'production'}`);
+            console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
+            console.log(`✅ Health check: http://localhost:${PORT}/health`);
+            console.log(`🎯 Plan: Pro (Always-on)`);
+        });
 
-process.on('SIGINT', () => {
-    console.log('SIGINT received: shutting down gracefully');
-    server.close(() => {
-        console.log('Server closed');
-        process.exit(0);
-    });
-});
+        // Graceful shutdown
+        process.on('SIGTERM', async () => {
+            console.log('SIGTERM signal received: closing HTTP server');
+            server.close(async () => {
+                console.log('HTTP server closed');
+                await database.disconnect();
+                process.exit(0);
+            });
+        });
 
-// Handle uncaught exceptions
-process.on('uncaughtException', (error) => {
-    console.error('Uncaught Exception:', error);
-    process.exit(1);
-});
+        process.on('SIGINT', async () => {
+            console.log('SIGINT signal received: closing HTTP server');
+            server.close(async () => {
+                console.log('HTTP server closed');
+                await database.disconnect();
+                process.exit(0);
+            });
+        });
 
-process.on('unhandledRejection', (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    process.exit(1);
-});
+        // Handle uncaught exceptions
+        process.on('uncaughtException', (error) => {
+            console.error('❌ Uncaught Exception:', error);
+            process.exit(1);
+        });
 
-console.log('🎯 Render-optimized server starting...');
+        process.on('unhandledRejection', (reason, promise) => {
+            console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
+            process.exit(1);
+        });
+
+    } catch (error) {
+        console.error('❌ Không thể khởi động server:', error);
+        console.error('Stack trace:', error.stack);
+        process.exit(1);
+    }
+};
+
+startServer();

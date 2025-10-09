@@ -5,15 +5,12 @@
   "main": "server.js",
   "scripts": {
     "start": "node server.js",
+    "start:pro": "node server-pro.js",
     "start:render": "node start-render.js",
     "dev": "nodemon server.js",
     "test": "echo \"Error: no test specified\" && exit 1",
-    "test:coldstart": "node test-coldstart.js",
-    "test:monitor": "node test-coldstart.js http://localhost:5000 monitor",
-    "setup:uptimerobot": "node setup-uptimerobot.js",
     "health": "curl http://localhost:5000/health",
-    "ping": "curl http://localhost:5000/ping",
-    "status": "curl http://localhost:5000/keepalive/status"
+    "ping": "curl http://localhost:5000/ping"
   },
   "keywords": [
     "lottery",
