@@ -16,6 +16,7 @@ const thongKeRoutes = require('./src/routes/thongke.routes');
 const articleRoutes = require('./src/routes/article.routes');
 const uploadRoutes = require('./src/routes/upload.routes');
 const database = require('./src/config/database');
+const { keepAliveMiddleware, keepAliveManager } = require('./src/middleware/keepAlive');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -179,6 +180,9 @@ app.use((req, res, next) => {
 // Compression middleware để giảm kích thước response
 app.use(compression());
 
+// Keep-alive middleware để tránh cold start
+app.use(keepAliveMiddleware);
+
 // Body parser middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
@@ -201,17 +205,60 @@ const limiter = rateLimit({
 
 app.use('/api/', limiter);
 
-// Health check endpoint
+// Health check endpoint for UptimeRobot monitoring
 app.get('/health', (req, res) => {
+    const startTime = Date.now();
+
     res.status(200).json({
         status: 'OK',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
         environment: process.env.NODE_ENV || 'development',
         memory: process.memoryUsage(),
-        version: process.version
+        version: process.version,
+        responseTime: `${Date.now() - startTime}ms`,
+        pid: process.pid,
+        uptimeFormatted: formatUptime(process.uptime())
     });
 });
+
+// Alternative health check endpoint for external monitoring
+app.get('/healthz', (req, res) => {
+    res.status(200).json({
+        status: 'healthy',
+        timestamp: new Date().toISOString(),
+        uptime: Math.floor(process.uptime()),
+        service: 'dande-api'
+    });
+});
+
+// Keep-alive endpoint to prevent cold start
+app.get('/ping', (req, res) => {
+    res.status(200).json({
+        message: 'pong',
+        timestamp: new Date().toISOString(),
+        uptime: process.uptime()
+    });
+});
+
+// Keep-alive status endpoint
+app.get('/keepalive/status', (req, res) => {
+    res.status(200).json({
+        success: true,
+        data: keepAliveManager.getStatus(),
+        message: 'Keep-alive status retrieved successfully'
+    });
+});
+
+// Utility function to format uptime
+function formatUptime(seconds) {
+    const days = Math.floor(seconds / 86400);
+    const hours = Math.floor((seconds % 86400) / 3600);
+    const minutes = Math.floor((seconds % 3600) / 60);
+    const secs = Math.floor(seconds % 60);
+
+    return `${days}d ${hours}h ${minutes}m ${secs}s`;
+}
 
 // Debug endpoint to test database connection
 app.get('/debug/db', async (req, res) => {

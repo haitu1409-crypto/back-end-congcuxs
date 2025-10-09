@@ -1,0 +1,93 @@
+{
+  "timestamp": "2025-10-09T07:00:26.449Z",
+  "summary": {
+    "total": 5,
+    "successful": 5,
+    "failed": 0
+  },
+  "results": [
+    {
+      "endpoint": "/health",
+      "name": "Health Check",
+      "success": true,
+      "responseTime": 65,
+      "status": 200,
+      "data": {
+        "status": "OK",
+        "timestamp": "2025-10-09T07:00:21.375Z",
+        "uptime": 4.389516,
+        "environment": "development",
+        "memory": {
+          "rss": 90976256,
+          "heapTotal": 61292544,
+          "heapUsed": 25747432,
+          "external": 20783370,
+          "arrayBuffers": 18284805
+        },
+        "version": "v22.19.0",
+        "responseTime": "0ms",
+        "pid": 32164,
+        "uptimeFormatted": "0d 0h 0m 4s"
+      },
+      "timestamp": "2025-10-09T07:00:21.386Z"
+    },
+    {
+      "endpoint": "/healthz",
+      "name": "Health Check (Alt)",
+      "success": true,
+      "responseTime": 8,
+      "status": 200,
+      "data": {
+        "status": "healthy",
+        "timestamp": "2025-10-09T07:00:22.405Z",
+        "uptime": 5,
+        "service": "dande-api"
+      },
+      "timestamp": "2025-10-09T07:00:22.408Z"
+    },
+    {
+      "endpoint": "/ping",
+      "name": "Ping Test",
+      "success": true,
+      "responseTime": 4,
+      "status": 200,
+      "data": {
+        "message": "pong",
+        "timestamp": "2025-10-09T07:00:23.418Z",
+        "uptime": 6.4325305
+      },
+      "timestamp": "2025-10-09T07:00:23.419Z"
+    },
+    {
+      "endpoint": "/keepalive/status",
+      "name": "Keep-Alive Status",
+      "success": true,
+      "responseTime": 4,
+      "status": 200,
+      "data": {
+        "success": true,
+        "data": {
+          "isActive": true,
+          "lastActivity": "2025-10-09T07:00:24.423Z",
+          "inactiveTime": 1,
+          "uptime": 7.4381464
+        },
+        "message": "Keep-alive status retrieved successfully"
+      },
+      "timestamp": "2025-10-09T07:00:24.425Z"
+    },
+    {
+      "endpoint": "/",
+      "name": "Root Endpoint",
+      "success": true,
+      "responseTime": 5,
+      "status": 200,
+      "data": {
+        "message": "Dàn Đề API is running",
+        "timestamp": "2025-10-09T07:00:25.440Z",
+        "status": "OK"
+      },
+      "timestamp": "2025-10-09T07:00:25.441Z"
+    }
+  ]
+}
