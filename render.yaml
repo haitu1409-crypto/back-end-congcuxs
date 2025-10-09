@@ -3,22 +3,22 @@ services:
     name: dande-api
     env: node
     buildCommand: npm install
-    startCommand: node server.js
-    plan: free
+    startCommand: npm start
     healthCheckPath: /health
-    autoDeploy: false
     envVars:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 5000
-      - key: FRONTEND_URL
-        value: https://taodandewukong.pro,https://www.taodandewukong.pro
-      - key: RATE_LIMIT_WINDOW_MS
-        value: 900000
-      - key: RATE_LIMIT_MAX_REQUESTS
-        value: 100
-      - key: MONGODB_URI
-        value: mongodb+srv://your-username:your-password@cluster.mongodb.net/dande-db
-      - key: MONGODB_DB_NAME
-        value: dande-db
+        value: 10000
+    scaling:
+      minInstances: 1
+      maxInstances: 3
+    disk:
+      name: dande-disk
+      mountPath: /opt/render/project/src/uploads
+      sizeGB: 1
+
+databases:
+  - name: dande-mongodb
+    databaseName: dande
+    user: dande_user

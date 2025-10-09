@@ -327,26 +327,42 @@ const startServer = async () => {
     try {
         console.log('🔄 Đang khởi động server...');
 
-        // Kết nối MongoDB với timeout
-        const connectWithTimeout = async () => {
-            const timeout = new Promise((_, reject) => {
-                setTimeout(() => reject(new Error('MongoDB connection timeout')), 30000);
-            });
-
-            const connect = database.connect();
-            return Promise.race([connect, timeout]);
-        };
-
-        await connectWithTimeout();
-        console.log('✅ Kết nối MongoDB thành công');
-
-        // Khởi động server
+        // Khởi động server ngay lập tức (không chờ MongoDB)
         const server = app.listen(PORT, '0.0.0.0', () => {
             console.log(`🚀 Server đang chạy trên port ${PORT}`);
             console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
             console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
             console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
+            console.log(`✅ Root endpoint available at: http://localhost:${PORT}/`);
         });
+
+        // Kết nối MongoDB trong background (không block server start)
+        const connectMongoDBInBackground = async () => {
+            try {
+                console.log('🔄 Đang kết nối MongoDB trong background...');
+                
+                const connectWithTimeout = async () => {
+                    const timeout = new Promise((_, reject) => {
+                        setTimeout(() => reject(new Error('MongoDB connection timeout')), 15000);
+                    });
+
+                    const connect = database.connect();
+                    return Promise.race([connect, timeout]);
+                };
+
+                await connectWithTimeout();
+                console.log('✅ Kết nối MongoDB thành công');
+            } catch (error) {
+                console.warn('⚠️ MongoDB connection failed:', error.message);
+                console.log('🔄 Server vẫn hoạt động bình thường, sẽ thử kết nối lại...');
+                
+                // Retry connection after 30 seconds
+                setTimeout(connectMongoDBInBackground, 30000);
+            }
+        };
+
+        // Start MongoDB connection in background
+        connectMongoDBInBackground();
 
         // Graceful shutdown
         process.on('SIGTERM', async () => {
