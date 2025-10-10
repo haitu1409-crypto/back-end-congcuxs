@@ -375,15 +375,23 @@ const startServer = async () => {
             });
         });
 
-        // Handle uncaught exceptions
+        // Handle uncaught exceptions - Don't exit in development
         process.on('uncaughtException', (error) => {
             console.error('❌ Uncaught Exception:', error);
-            process.exit(1);
+            if (process.env.NODE_ENV === 'production') {
+                process.exit(1);
+            } else {
+                console.log('🔄 Continuing in development mode...');
+            }
         });
 
         process.on('unhandledRejection', (reason, promise) => {
             console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-            process.exit(1);
+            if (process.env.NODE_ENV === 'production') {
+                process.exit(1);
+            } else {
+                console.log('🔄 Continuing in development mode...');
+            }
         });
 
     } catch (error) {

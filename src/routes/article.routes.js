@@ -80,6 +80,10 @@ router.get('/:slug', getArticleBySlug);
 // Interaction routes
 router.post('/:slug/like', likeArticle);
 router.post('/:slug/share', shareArticle);
+router.post('/:slug/view', (req, res) => {
+    // Simple view tracking endpoint
+    res.json({ success: true, message: 'View tracked' });
+});
 
 // Admin routes
 router.post('/create', 
