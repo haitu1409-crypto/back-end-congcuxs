@@ -55,14 +55,15 @@ const articleSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Danh mục là bắt buộc'],
         enum: [
-            'giai-ma-giac-mo',
-            'kinh-nghiem-choi-lo-de',
+            'du-doan-ket-qua-xo-so',
+            'dan-de-chuyen-nghiep',
             'thong-ke-xo-so',
-            'meo-vat-xo-so',
+            'giai-ma-giac-mo',
             'tin-tuc-xo-so',
-            'huong-dan-choi',
+            'kinh-nghiem-choi-lo-de',
+            'meo-vat-xo-so',
             'phuong-phap-soi-cau',
-            'dan-de-chuyen-nghiep'
+            'huong-dan-choi'
         ],
         index: true
     },
@@ -141,19 +142,41 @@ articleSchema.index({ views: -1, publishedAt: -1 });
 articleSchema.index({ isFeatured: 1, status: 1, publishedAt: -1 });
 
 // Virtual for URL
-articleSchema.virtual('url').get(function() {
+articleSchema.virtual('url').get(function () {
     return `/tin-tuc/${this.slug}`;
 });
 
 // Pre-save middleware
-articleSchema.pre('save', function(next) {
+articleSchema.pre('save', async function (next) {
     // Generate slug from title
     if (this.isModified('title')) {
-        this.slug = slugify(this.title, {
+        let baseSlug = slugify(this.title, {
             lower: true,
             strict: true,
             remove: /[*+~.()'"!:@]/g
         });
+
+        // Check for duplicate slugs and add number if needed
+        let slug = baseSlug;
+        let counter = 1;
+
+        while (true) {
+            const existingArticle = await this.constructor.findOne({
+                slug: slug,
+                _id: { $ne: this._id } // Exclude current document
+            });
+
+            if (!existingArticle) {
+                this.slug = slug;
+                break;
+            }
+
+            // If duplicate found, add counter
+            slug = `${baseSlug}-${counter}`;
+            counter++;
+
+            console.log(`⚠️ Slug duplicate found, trying: ${slug}`);
+        }
     }
 
     // Set publishedAt when status changes to published
@@ -169,7 +192,7 @@ articleSchema.pre('save', function(next) {
 
     // Generate meta description if not provided
     if (!this.metaDescription && this.excerpt) {
-        this.metaDescription = this.excerpt.length > 160 
+        this.metaDescription = this.excerpt.length > 160
             ? this.excerpt.substring(0, 157) + '...'
             : this.excerpt;
     }
@@ -178,29 +201,29 @@ articleSchema.pre('save', function(next) {
 });
 
 // Static methods
-articleSchema.statics.findPublished = function() {
+articleSchema.statics.findPublished = function () {
     return this.find({ status: 'published' });
 };
 
-articleSchema.statics.findByCategory = function(category) {
+articleSchema.statics.findByCategory = function (category) {
     return this.find({ category, status: 'published' });
 };
 
-articleSchema.statics.findTrending = function(limit = 10) {
-    return this.find({ 
+articleSchema.statics.findTrending = function (limit = 10) {
+    return this.find({
         status: 'published',
-        isTrending: true 
+        isTrending: true
     }).sort({ views: -1, publishedAt: -1 }).limit(limit);
 };
 
-articleSchema.statics.findFeatured = function(limit = 5) {
-    return this.find({ 
+articleSchema.statics.findFeatured = function (limit = 5) {
+    return this.find({
         status: 'published',
-        isFeatured: true 
+        isFeatured: true
     }).sort({ publishedAt: -1 }).limit(limit);
 };
 
-articleSchema.statics.search = function(query) {
+articleSchema.statics.search = function (query) {
     return this.find({
         $text: { $search: query },
         status: 'published'
@@ -210,32 +233,33 @@ articleSchema.statics.search = function(query) {
 };
 
 // Instance methods
-articleSchema.methods.incrementViews = async function() {
+articleSchema.methods.incrementViews = async function () {
     this.views = (this.views || 0) + 1;
     return this.save();
 };
 
-articleSchema.methods.incrementLikes = async function() {
+articleSchema.methods.incrementLikes = async function () {
     this.likes = (this.likes || 0) + 1;
     return this.save();
 };
 
-articleSchema.methods.incrementShares = async function() {
+articleSchema.methods.incrementShares = async function () {
     this.shares = (this.shares || 0) + 1;
     return this.save();
 };
 
 // Category labels
-articleSchema.statics.getCategoryLabels = function() {
+articleSchema.statics.getCategoryLabels = function () {
     return {
-        'giai-ma-giac-mo': 'Giải Mã Giấc Mơ',
-        'kinh-nghiem-choi-lo-de': 'Kinh Nghiệm Chơi Lô Đề',
+        'du-doan-ket-qua-xo-so': 'Dự Đoán Kết Quả Xổ Số',
+        'dan-de-chuyen-nghiep': 'Dàn Đề Chuyên Nghiệp',
         'thong-ke-xo-so': 'Thống Kê Xổ Số',
-        'meo-vat-xo-so': 'Mẹo Vặt Xổ Số',
+        'giai-ma-giac-mo': 'Giải Mã Giấc Mơ',
         'tin-tuc-xo-so': 'Tin Tức Xổ Số',
-        'huong-dan-choi': 'Hướng Dẫn Chơi',
+        'kinh-nghiem-choi-lo-de': 'Kinh Nghiệm Chơi Lô Đề',
+        'meo-vat-xo-so': 'Mẹo Vặt Xổ Số',
         'phuong-phap-soi-cau': 'Phương Pháp Soi Cầu',
-        'dan-de-chuyen-nghiep': 'Dàn Đề Chuyên Nghiệp'
+        'huong-dan-choi': 'Hướng Dẫn Chơi'
     };
 };
 

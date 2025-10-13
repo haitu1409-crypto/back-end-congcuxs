@@ -62,7 +62,7 @@ const rateLimitMiddleware = rateLimit({
  */
 const apiRateLimitMiddleware = rateLimit({
     windowMs: 1 * 60 * 1000, // 1 phút
-    max: 30, // Tối đa 30 requests per minute
+    max: 200, // Tối đa 200 requests per minute (increased for development)
     message: {
         success: false,
         message: 'API rate limit exceeded. Vui lòng thử lại sau.'

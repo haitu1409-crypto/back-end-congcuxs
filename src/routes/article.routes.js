@@ -24,7 +24,7 @@ const router = express.Router();
 // Rate limiting - Relaxed for development
 const generalLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: 1000, // limit each IP to 1000 requests per windowMs (increased for development)
+    max: 2000, // limit each IP to 2000 requests per windowMs (increased for development)
     message: {
         success: false,
         message: 'Quá nhiều yêu cầu, vui lòng thử lại sau'
@@ -86,7 +86,7 @@ router.post('/:slug/view', (req, res) => {
 });
 
 // Admin routes
-router.post('/create', 
+router.post('/create',
     createLimiter,
     upload.fields([
         { name: 'featuredImage', maxCount: 1 },

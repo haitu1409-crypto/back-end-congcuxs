@@ -14,19 +14,20 @@ const parseInputND = (input, digitCount = 3) => {
         return { numbers: [], error: 'Input không hợp lệ' };
     }
 
-    // Kiểm tra ký tự hợp lệ
-    if (!/^[0-9\s,;]*$/.test(input)) {
+    // Kiểm tra ký tự hợp lệ (bao gồm cả xuống dòng)
+    if (!/^[0-9\s,;\r\n]*$/.test(input)) {
         return {
             numbers: [],
             error: 'Vui lòng chỉ nhập số và các ký tự phân tách (, ; hoặc khoảng trắng)'
         };
     }
 
-    // Chuẩn hóa
+    // Chuẩn hóa: thay thế tất cả dấu phân tách (bao gồm xuống dòng) bằng ,
     const normalized = input
-        .replace(/[;\s]+/g, ',')
-        .replace(/,+/g, ',')
-        .replace(/^,|,$/g, '');
+        .replace(/[\r\n]+/g, ',')    // Xuống dòng → dấu phẩy
+        .replace(/[;\s]+/g, ',')     // Chấm phẩy, space → dấu phẩy
+        .replace(/,+/g, ',')         // Nhiều dấu phẩy → 1 dấu phẩy
+        .replace(/^,|,$/g, '');      // Xóa dấu phẩy đầu/cuối
 
     const nums = normalized.split(',')
         .map(num => num.trim())

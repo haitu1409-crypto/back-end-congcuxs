@@ -29,7 +29,7 @@ const ADMIN_PASSWORD = '141920';
 const getArticles = async (req, res) => {
     try {
         const page = parseInt(req.query.page) || 1;
-        const limit = parseInt(req.query.limit) || 10;
+        const limit = parseInt(req.query.limit) || 10; // 10 articles per page
         const category = req.query.category;
         const search = req.query.search;
         const sort = req.query.sort || '-publishedAt';
@@ -55,6 +55,15 @@ const getArticles = async (req, res) => {
         if (search) {
             query.$text = { $search: search };
         }
+
+        // Debug log
+        console.log('🔍 Articles API Query:', {
+            category: category || 'all',
+            page,
+            limit,
+            sort,
+            query
+        });
 
         // Calculate pagination
         const skip = (page - 1) * limit;
@@ -170,12 +179,14 @@ const getArticleBySlug = async (req, res) => {
 };
 
 /**
- * Get featured articles
+ * Get featured articles - now returns latest articles from selected category
  */
 const getFeaturedArticles = async (req, res) => {
     try {
-        const limit = parseInt(req.query.limit) || 5;
-        const cacheKey = `featured_articles_${limit}`;
+        const limit = parseInt(req.query.limit) || 3;
+        const category = req.query.category; // Add category parameter
+
+        const cacheKey = `featured_articles_${limit}_${category || 'all'}`;
         const cachedData = cache.get(cacheKey);
 
         if (cachedData) {
@@ -186,10 +197,27 @@ const getFeaturedArticles = async (req, res) => {
             });
         }
 
-        const articles = await Article.findFeatured(limit);
-        // Convert Mongoose documents to plain objects for caching
-        const articlesData = articles.map(article => article.toObject());
-        cache.set(cacheKey, articlesData);
+        // Build query - get latest articles from selected category or all categories
+        let query = { status: 'published' };
+        if (category) {
+            query.category = category;
+        }
+
+        const articles = await Article.find(query)
+            .select('-content') // Exclude full content for list view
+            .sort({ publishedAt: -1 }) // Latest first
+            .limit(limit)
+            .lean();
+
+        // Debug log
+        console.log('🌟 Featured Articles API:', {
+            category: category || 'all',
+            limit,
+            articlesCount: articles.length,
+            articles: articles.map(a => ({ title: a.title, category: a.category, publishedAt: a.publishedAt }))
+        });
+
+        cache.set(cacheKey, articles);
 
         res.json({
             success: true,
@@ -286,6 +314,27 @@ const getArticlesByCategory = async (req, res) => {
                 hasPrev: page > 1
             }
         };
+
+        // Debug log
+        console.log('📰 Articles API Response:', {
+            category: category || 'all',
+            page,
+            limit,
+            articlesCount: articles.length,
+            totalArticles: total,
+            totalPages: Math.ceil(total / limit),
+            pagination: {
+                currentPage: page,
+                totalPages: Math.ceil(total / limit),
+                hasNext: page < Math.ceil(total / limit),
+                hasPrev: page > 1
+            },
+            heroArticle: articles.length > 0 ? {
+                title: articles[0].title,
+                category: articles[0].category,
+                publishedAt: articles[0].publishedAt
+            } : null
+        });
 
         cache.set(cacheKey, result);
 
@@ -545,26 +594,83 @@ const createArticle = async (req, res) => {
         // Handle tags and keywords - can be string or array
         const processTags = (tags) => {
             if (!tags) return [];
-            if (Array.isArray(tags)) return tags.filter(tag => tag.trim());
-            if (typeof tags === 'string') return tags.split(',').map(tag => tag.trim()).filter(tag => tag);
+
+            // Try to parse if it's a JSON string
+            if (typeof tags === 'string') {
+                try {
+                    const parsed = JSON.parse(tags);
+                    if (Array.isArray(parsed)) {
+                        return parsed.filter(tag => tag && tag.trim());
+                    }
+                } catch (e) {
+                    // Not JSON, treat as comma-separated
+                    return tags.split(',').map(tag => tag.trim()).filter(tag => tag);
+                }
+            }
+
+            if (Array.isArray(tags)) {
+                return tags.filter(tag => tag && tag.trim());
+            }
+
             return [];
         };
 
         const processKeywords = (keywords) => {
             if (!keywords) return [];
-            if (Array.isArray(keywords)) return keywords.filter(keyword => keyword.trim());
-            if (typeof keywords === 'string') return keywords.split(',').map(keyword => keyword.trim()).filter(keyword => keyword);
+
+            // Try to parse if it's a JSON string
+            if (typeof keywords === 'string') {
+                try {
+                    const parsed = JSON.parse(keywords);
+                    if (Array.isArray(parsed)) {
+                        return parsed.filter(keyword => keyword && keyword.trim());
+                    }
+                } catch (e) {
+                    // Not JSON, treat as comma-separated
+                    return keywords.split(',').map(keyword => keyword.trim()).filter(keyword => keyword);
+                }
+            }
+
+            if (Array.isArray(keywords)) {
+                return keywords.filter(keyword => keyword && keyword.trim());
+            }
+
             return [];
         };
 
+        // Truncate metaDescription if it's too long
+        const processMetaDescription = (description) => {
+            if (!description) return '';
+            if (description.length <= 160) return description;
+            console.log(`⚠️ MetaDescription truncated from ${description.length} to 160 chars`);
+            // Truncate to 157 chars and add "..."
+            return description.substring(0, 157) + '...';
+        };
+
+        // Truncate title if it's too long
+        const processTitle = (text) => {
+            if (!text) return '';
+            if (text.length <= 200) return text;
+            console.log(`⚠️ Title truncated from ${text.length} to 200 chars`);
+            return text.substring(0, 197) + '...';
+        };
+
+        // Truncate excerpt if it's too long
+        const processExcerpt = (text) => {
+            if (!text) return '';
+            if (text.length <= 500) return text;
+            console.log(`⚠️ Excerpt truncated from ${text.length} to 500 chars`);
+            return text.substring(0, 497) + '...';
+        };
+
         const articleData = {
-            title,
-            excerpt,
+            title: processTitle(title),
+            excerpt: processExcerpt(excerpt),
             content,
             category,
             tags: processTags(tags),
             keywords: processKeywords(keywords),
-            metaDescription,
+            metaDescription: processMetaDescription(metaDescription),
             author: author || 'Admin',
             images,
             isFeatured: isFeatured === 'true',
