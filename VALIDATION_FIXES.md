@@ -155,3 +155,4 @@ Khi field bị truncate, sẽ có console log:
 
 
 
+

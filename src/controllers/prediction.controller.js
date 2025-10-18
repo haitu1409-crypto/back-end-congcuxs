@@ -171,7 +171,7 @@ const getPredictionByDate = async (req, res) => {
 };
 
 /**
- * Get today's prediction
+ * Get today's prediction (fallback to latest if no prediction for today)
  */
 const getTodayPrediction = async (req, res) => {
     try {
@@ -184,16 +184,27 @@ const getTodayPrediction = async (req, res) => {
             return res.json({
                 success: true,
                 data: cachedData,
-                cached: true
+                cached: true,
+                isToday: true
             });
         }
 
-        const prediction = await Prediction.findToday();
+        // Try to get today's prediction first
+        let prediction = await Prediction.findToday();
+        let isToday = true;
+
+        // If no prediction for today, get the latest one
+        if (!prediction) {
+            console.log('⚠️ Không có dự đoán cho hôm nay, lấy bài mới nhất...');
+            const latestPredictions = await Prediction.findLatest(1);
+            prediction = latestPredictions[0];
+            isToday = false;
+        }
 
         if (!prediction) {
             return res.status(404).json({
                 success: false,
-                message: 'Chưa có dự đoán cho hôm nay'
+                message: 'Chưa có dự đoán nào'
             });
         }
 
@@ -205,7 +216,8 @@ const getTodayPrediction = async (req, res) => {
 
         res.json({
             success: true,
-            data: prediction
+            data: prediction,
+            isToday: isToday
         });
 
     } catch (error) {
