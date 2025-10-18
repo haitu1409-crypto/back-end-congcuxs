@@ -14,6 +14,7 @@ const rateLimit = require('express-rate-limit');
 const danDeRoutes = require('./src/routes/dande.routes');
 const thongKeRoutes = require('./src/routes/thongke.routes');
 const articleRoutes = require('./src/routes/article.routes');
+const predictionRoutes = require('./src/routes/prediction.routes');
 const uploadRoutes = require('./src/routes/upload.routes');
 const database = require('./src/config/database');
 // Keep-alive middleware removed for Pro version
@@ -289,6 +290,7 @@ app.get('/', (req, res) => {
 app.use('/api/dande', danDeRoutes);
 app.use('/api/thongke', thongKeRoutes);
 app.use('/api/articles', articleRoutes);
+app.use('/api/predictions', predictionRoutes);
 app.use('/api', uploadRoutes);
 
 // Serve static files from uploads directory

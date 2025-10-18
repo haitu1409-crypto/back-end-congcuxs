@@ -16,7 +16,8 @@ const {
     createArticle,
     getCategories,
     likeArticle,
-    shareArticle
+    shareArticle,
+    deleteArticle
 } = require('../controllers/article.controller');
 
 const router = express.Router();
@@ -108,6 +109,8 @@ router.post('/create',
     },
     createArticle
 );
+
+router.delete('/:id', deleteArticle);
 
 
 module.exports = router;

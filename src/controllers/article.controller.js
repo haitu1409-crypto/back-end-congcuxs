@@ -855,6 +855,49 @@ const shareArticle = async (req, res) => {
     }
 };
 
+/**
+ * Delete article (Admin only)
+ */
+const deleteArticle = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { password } = req.body;
+
+        // Check admin password
+        if (password !== ADMIN_PASSWORD) {
+            return res.status(401).json({
+                success: false,
+                message: 'Mật khẩu không đúng'
+            });
+        }
+
+        const deletedArticle = await Article.findByIdAndDelete(id);
+
+        if (!deletedArticle) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy bài viết'
+            });
+        }
+
+        // Clear caches
+        cache.flushAll();
+
+        res.json({
+            success: true,
+            message: 'Xóa bài viết thành công'
+        });
+
+    } catch (error) {
+        console.error('Error deleting article:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi xóa bài viết',
+            error: error.message
+        });
+    }
+};
+
 module.exports = {
     getArticles,
     getArticleBySlug,
@@ -865,5 +908,6 @@ module.exports = {
     createArticle,
     getCategories,
     likeArticle,
-    shareArticle
+    shareArticle,
+    deleteArticle
 };
