@@ -4,14 +4,10 @@ services:
     env: node
     plan: free
     buildCommand: npm run build
-    startCommand: node start-render.js
+    startCommand: node server.js
     envVars:
       - key: NODE_ENV
         value: production
-      - key: MONGODB_URI
-        fromDatabase:
-          name: dande-thongke
-          property: connectionString
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: "true"
       - key: PUPPETEER_EXECUTABLE_PATH
