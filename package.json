@@ -11,7 +11,9 @@
     "scrape": "node xsmb-scraper-cli.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "health": "curl http://localhost:5000/health",
-    "ping": "curl http://localhost:5000/ping"
+    "ping": "curl http://localhost:5000/ping",
+    "build": "echo 'No build step required for Node.js'",
+    "postinstall": "node -e \"if (process.env.NODE_ENV === 'production') { console.log('Skipping Puppeteer install in production'); }\""
   },
   "keywords": [
     "lottery",
@@ -41,6 +43,7 @@
     "node-cron": "^3.0.3",
     "node-fetch": "^3.3.2",
     "puppeteer": "^21.6.1",
+    "puppeteer-core": "^21.6.1",
     "slugify": "^1.6.6"
   },
   "devDependencies": {
