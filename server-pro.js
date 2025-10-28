@@ -1,6 +1,6 @@
 /**
- * Server Entry Point
- * Khởi tạo Express server với các middleware bảo mật và tối ưu hiệu suất
+ * Simplified Server for Render Pro
+ * No need for complex cold start prevention
  */
 
 require('dotenv').config();
@@ -9,26 +9,12 @@ const cors = require('cors');
 const helmet = require('helmet');
 const compression = require('compression');
 const morgan = require('morgan');
-const rateLimit = require('express-rate-limit');
 
 const danDeRoutes = require('./src/routes/dande.routes');
+const thongKeRoutes = require('./src/routes/thongke.routes');
 const articleRoutes = require('./src/routes/article.routes');
-const predictionRoutes = require('./src/routes/prediction.routes');
 const uploadRoutes = require('./src/routes/upload.routes');
-const xsmbScraperRoutes = require('./src/routes/xsmbScraper.routes');
-const soiCauRoutes = require('./src/routes/soiCau.routes');
-const positionSoiCauRoutes = require('./src/routes/positionSoiCau.routes');
-const bayesianRoutes = require('./src/routes/bayesian.routes');
-const soicauPageRoutes = require('./src/routes/soicauPage.routes');
-const advancedGapAnalysisRoutes = require('./src/routes/advancedGapAnalysis.routes');
-const ultraAdvancedSoiCauRoutes = require('./src/routes/ultraAdvancedSoiCau.routes');
-const bachThuDeRoutes = require('./src/routes/bachThuDe.routes');
-const schedulerRoutes = require('./src/routes/scheduler.routes');
-const testRoutes = require('./src/routes/test.routes');
 const database = require('./src/config/database');
-const xsmbScheduler = require('./src/services/xsmbScheduler.service');
-const optimizedSoiCauScheduler = require('./src/services/optimizedSoiCauScheduler.service');
-// Keep-alive middleware removed for Pro version
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -65,8 +51,6 @@ app.use(cors({
         if (!origin) return callback(null, true);
 
         console.log('🔍 Request Origin:', origin);
-        console.log('✅ Checking against allowed origins:', allowedOrigins);
-        console.log('🔧 Environment:', process.env.NODE_ENV);
 
         // Check exact match or wildcard
         if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
@@ -74,7 +58,7 @@ app.use(cors({
             return callback(null, true);
         }
 
-        // Check for subdomain matches (e.g., www.taodandewukong.pro matches taodandewukong.pro)
+        // Check for subdomain matches
         const isSubdomainMatch = allowedOrigins.some(allowedOrigin => {
             if (allowedOrigin.includes('.')) {
                 const domain = allowedOrigin.replace(/^https?:\/\//, '');
@@ -83,10 +67,10 @@ app.use(cors({
                 // Exact match
                 if (requestDomain === domain) return true;
 
-                // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
+                // Subdomain match
                 if (requestDomain.endsWith('.' + domain)) return true;
 
-                // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
+                // Reverse subdomain match
                 if (domain.endsWith('.' + requestDomain)) return true;
 
                 // Check if both are subdomains of the same root domain
@@ -108,8 +92,6 @@ app.use(cors({
         }
 
         console.log('❌ CORS blocked for:', origin);
-        console.log('🔍 Debug - Request domain parts:', origin.replace(/^https?:\/\//, '').split('.'));
-        console.log('🔍 Debug - Allowed origins domain parts:', allowedOrigins.map(o => o.replace(/^https?:\/\//, '').split('.')));
         return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
@@ -149,10 +131,10 @@ app.use((req, res, next) => {
                 // Exact match
                 if (requestDomain === domain) return true;
 
-                // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
+                // Subdomain match
                 if (requestDomain.endsWith('.' + domain)) return true;
 
-                // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
+                // Reverse subdomain match
                 if (domain.endsWith('.' + requestDomain)) return true;
 
                 // Check if both are subdomains of the same root domain
@@ -189,10 +171,8 @@ app.use((req, res, next) => {
     next();
 });
 
-// Compression middleware để giảm kích thước response
+// Compression middleware
 app.use(compression());
-
-// Keep-alive middleware removed for Pro version
 
 // Body parser middleware
 app.use(express.json({ limit: '10mb' }));
@@ -205,76 +185,40 @@ if (process.env.NODE_ENV === 'development') {
     app.use(morgan('combined'));
 }
 
-// Rate limiting để bảo vệ API - Tối ưu cho development và production
-const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
-
+// Rate limiting
+const rateLimit = require('express-rate-limit');
 const limiter = rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 5000 : 2000), // 5000 cho dev, 2000 cho prod
-    message: {
-        error: 'Too Many Requests',
-        message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau.',
-        retryAfter: Math.ceil(15 * 60 * 1000 / 1000) // seconds
-    },
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
+    message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau.',
     standardHeaders: true,
     legacyHeaders: false,
-    skip: (req) => {
-        // Skip rate limiting for health checks
-        return req.path === '/health' || req.path === '/healthz' || req.path === '/ping';
-    }
-    // onLimitReached deprecated in express-rate-limit v7 - removed
 });
 
-// Rate limiter riêng cho các API endpoints có thể bị gọi nhiều
-const heavyApiLimiter = rateLimit({
-    windowMs: 5 * 60 * 1000, // 5 minutes
-    max: isDevelopment ? 1000 : 500, // Ít hơn cho các API nặng
-    message: {
-        error: 'Too Many Requests',
-        message: 'API này đang được gọi quá nhiều, vui lòng thử lại sau.',
-        retryAfter: Math.ceil(5 * 60 * 1000 / 1000)
-    },
-    standardHeaders: true,
-    legacyHeaders: false
-    // onLimitReached deprecated in express-rate-limit v7 - removed
-});
-
-// Áp dụng rate limiting cho tất cả API routes
 app.use('/api/', limiter);
 
-// Áp dụng rate limiting nặng hơn cho các API cụ thể
-app.use('/api/soicau-page/', heavyApiLimiter);
-app.use('/api/bach-thu-de/', heavyApiLimiter);
-app.use('/api/soicau/', heavyApiLimiter);
-
-// Health check endpoint for UptimeRobot monitoring
+// Health check endpoints
 app.get('/health', (req, res) => {
-    const startTime = Date.now();
-
     res.status(200).json({
         status: 'OK',
         timestamp: new Date().toISOString(),
         uptime: process.uptime(),
-        environment: process.env.NODE_ENV || 'development',
+        environment: process.env.NODE_ENV || 'production',
         memory: process.memoryUsage(),
         version: process.version,
-        responseTime: `${Date.now() - startTime}ms`,
-        pid: process.pid,
-        uptimeFormatted: formatUptime(process.uptime())
+        service: 'dande-api-pro'
     });
 });
 
-// Alternative health check endpoint for external monitoring
 app.get('/healthz', (req, res) => {
     res.status(200).json({
         status: 'healthy',
         timestamp: new Date().toISOString(),
         uptime: Math.floor(process.uptime()),
-        service: 'dande-api'
+        service: 'dande-api-pro'
     });
 });
 
-// Keep-alive endpoint to prevent cold start
 app.get('/ping', (req, res) => {
     res.status(200).json({
         message: 'pong',
@@ -283,65 +227,21 @@ app.get('/ping', (req, res) => {
     });
 });
 
-// Keep-alive endpoint removed for Pro version
-
-// Utility function to format uptime
-function formatUptime(seconds) {
-    const days = Math.floor(seconds / 86400);
-    const hours = Math.floor((seconds % 86400) / 3600);
-    const minutes = Math.floor((seconds % 3600) / 60);
-    const secs = Math.floor(seconds % 60);
-
-    return `${days}d ${hours}h ${minutes}m ${secs}s`;
-}
-
-// Debug endpoint to test database connection
-app.get('/debug/db', async (req, res) => {
-    try {
-        const database = require('./src/config/database');
-        const status = database.getConnectionStatus();
-        const ping = await database.ping();
-
-        res.status(200).json({
-            success: true,
-            database: {
-                status: status,
-                ping: ping,
-                connected: status.state === 'connected'
-            }
-        });
-    } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message,
-            stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-        });
-    }
-});
-
-// Root endpoint for Render health check
+// Root endpoint
 app.get('/', (req, res) => {
     res.status(200).json({
-        message: 'Dàn Đề API is running',
+        message: 'Dàn Đề API Pro is running',
         timestamp: new Date().toISOString(),
-        status: 'OK'
+        status: 'OK',
+        version: '2.0.0',
+        plan: 'pro'
     });
 });
 
 // API routes
 app.use('/api/dande', danDeRoutes);
+app.use('/api/thongke', thongKeRoutes);
 app.use('/api/articles', articleRoutes);
-app.use('/api/predictions', predictionRoutes);
-app.use('/api/xsmb', xsmbScraperRoutes);
-app.use('/api/soicau', soiCauRoutes);
-app.use('/api/position-soicau', positionSoiCauRoutes);
-app.use('/api/bayesian', bayesianRoutes);
-app.use('/api/soicau-page', soicauPageRoutes);
-app.use('/api/advanced-gap-analysis', advancedGapAnalysisRoutes);
-app.use('/api/ultra-advanced-soicau', ultraAdvancedSoiCauRoutes);
-app.use('/api/bach-thu-de', bachThuDeRoutes);
-app.use('/api/scheduler', schedulerRoutes);
-app.use('/api/test', testRoutes);
 app.use('/api', uploadRoutes);
 
 // Serve static files from uploads directory
@@ -370,57 +270,24 @@ app.use((err, req, res, next) => {
 // Start server
 const startServer = async () => {
     try {
-        console.log('🔄 Đang khởi động server...');
+        console.log('🔄 Đang khởi động server Pro...');
 
-        // Khởi động server ngay lập tức (không chờ MongoDB)
+        // Connect to MongoDB (can wait since Pro plan is always-on)
+        await database.connect();
+        console.log('✅ Kết nối MongoDB thành công');
+
+        // Start server
         const server = app.listen(PORT, '0.0.0.0', () => {
-            console.log(`🚀 Server đang chạy trên port ${PORT}`);
-            console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+            console.log(`🚀 Server Pro đang chạy trên port ${PORT}`);
+            console.log(`📝 Environment: ${process.env.NODE_ENV || 'production'}`);
             console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
-            console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
-            console.log(`✅ Root endpoint available at: http://localhost:${PORT}/`);
+            console.log(`✅ Health check: http://localhost:${PORT}/health`);
+            console.log(`🎯 Plan: Pro (Always-on)`);
         });
-
-        // Kết nối MongoDB trong background (không block server start)
-        const connectMongoDBInBackground = async () => {
-            try {
-                console.log('🔄 Đang kết nối MongoDB trong background...');
-
-                const connectWithTimeout = async () => {
-                    const timeout = new Promise((_, reject) => {
-                        setTimeout(() => reject(new Error('MongoDB connection timeout')), 15000);
-                    });
-
-                    const connect = database.connect();
-                    return Promise.race([connect, timeout]);
-                };
-
-                await connectWithTimeout();
-                console.log('✅ Kết nối MongoDB thành công');
-
-            } catch (error) {
-                console.warn('⚠️ MongoDB connection failed:', error.message);
-                console.log('🔄 Server vẫn hoạt động bình thường, sẽ thử kết nối lại...');
-
-                // Retry connection after 30 seconds
-                setTimeout(connectMongoDBInBackground, 30000);
-            }
-        };
-
-        // Start MongoDB connection in background
-        connectMongoDBInBackground();
-
-        // Initialize XSMB Scheduler
-        xsmbScheduler.init();
-
-        // Initialize Optimized Soi Cầu Scheduler
-        optimizedSoiCauScheduler.init();
 
         // Graceful shutdown
         process.on('SIGTERM', async () => {
             console.log('SIGTERM signal received: closing HTTP server');
-            xsmbScheduler.stop();
-            optimizedSoiCauScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();
@@ -430,8 +297,6 @@ const startServer = async () => {
 
         process.on('SIGINT', async () => {
             console.log('SIGINT signal received: closing HTTP server');
-            xsmbScheduler.stop();
-            optimizedSoiCauScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();
@@ -439,23 +304,15 @@ const startServer = async () => {
             });
         });
 
-        // Handle uncaught exceptions - Don't exit in development
+        // Handle uncaught exceptions
         process.on('uncaughtException', (error) => {
             console.error('❌ Uncaught Exception:', error);
-            if (process.env.NODE_ENV === 'production') {
-                process.exit(1);
-            } else {
-                console.log('🔄 Continuing in development mode...');
-            }
+            process.exit(1);
         });
 
         process.on('unhandledRejection', (reason, promise) => {
             console.error('❌ Unhandled Rejection at:', promise, 'reason:', reason);
-            if (process.env.NODE_ENV === 'production') {
-                process.exit(1);
-            } else {
-                console.log('🔄 Continuing in development mode...');
-            }
+            process.exit(1);
         });
 
     } catch (error) {
@@ -466,4 +323,3 @@ const startServer = async () => {
 };
 
 startServer();
-

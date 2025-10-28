@@ -1,4 +1,4 @@
-const { puppeteer, getPuppeteerConfig } = require('../../puppeteer-config');
+const puppeteer = require('puppeteer');
 const XSMB = require('../models/xsmb.model');
 const database = require('../config/database');
 
@@ -167,9 +167,19 @@ class XSMBScraperService {
             const slug = `${station}-${formattedDate}`;
             const dayOfWeek = ['Chủ nhật', 'Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7'][dayOfWeekIndex] || 'Thứ 2';
 
-            // Khởi tạo browser với cấu hình tối ưu cho Render
-            const config = getPuppeteerConfig();
-            browser = await puppeteer.launch(config);
+            // Khởi tạo browser
+            browser = await puppeteer.launch({
+                headless: 'new', // Sử dụng headless mode mới để tránh cảnh báo
+                args: [
+                    '--no-sandbox',
+                    '--disable-setuid-sandbox',
+                    '--disable-dev-shm-usage',
+                    '--disable-gpu',
+                    '--disable-web-security',
+                    '--disable-features=VizDisplayCompositor'
+                ],
+                executablePath: process.env.CHROMIUM_PATH || undefined,
+            });
 
             page = await browser.newPage();
             await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/91.0.4472.124');
