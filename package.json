@@ -14,7 +14,8 @@
     "ping": "curl http://localhost:5000/ping",
     "build": "echo 'Starting build...' && npm ci --only=production --no-audit --no-fund --prefer-offline && echo 'Build completed successfully!'",
     "postinstall": "echo '✅ Dependencies installed successfully'",
-    "preinstall": "echo '📦 Installing dependencies...'"
+    "preinstall": "echo '📦 Installing dependencies...'",
+    "install": "npm ci --only=production --no-audit --no-fund --prefer-offline"
   },
   "keywords": [
     "lottery",

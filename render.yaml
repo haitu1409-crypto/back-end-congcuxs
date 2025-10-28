@@ -1,10 +1,9 @@
 services:
   - type: web
     name: back-end-dande
-    env: node
+    env: docker
     plan: free
-    buildCommand: npm run build
-    startCommand: node server.js
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: NODE_ENV
         value: production
