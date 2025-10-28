@@ -3,7 +3,7 @@ services:
     name: back-end-dande
     env: node
     plan: free
-    buildCommand: npm ci --only=production --no-audit --no-fund --prefer-offline
+    buildCommand: chmod +x build.sh && ./build.sh
     startCommand: node start-render.js
     envVars:
       - key: NODE_ENV

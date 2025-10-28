@@ -12,9 +12,9 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "health": "curl http://localhost:5000/health",
     "ping": "curl http://localhost:5000/ping",
-    "build": "echo 'No build step required for Node.js'",
-    "postinstall": "echo 'Install completed successfully'",
-    "preinstall": "echo 'Starting npm install...'"
+    "build": "echo 'Build completed - no build step required'",
+    "postinstall": "echo '✅ Dependencies installed successfully'",
+    "preinstall": "echo '📦 Installing dependencies...'"
   },
   "keywords": [
     "lottery",

@@ -1,1 +1,1 @@
-web: npm run start:pro
+web: node start-render.js
