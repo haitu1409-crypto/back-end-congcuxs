@@ -24,7 +24,6 @@ const advancedGapAnalysisRoutes = require('./src/routes/advancedGapAnalysis.rout
 const ultraAdvancedSoiCauRoutes = require('./src/routes/ultraAdvancedSoiCau.routes');
 const bachThuDeRoutes = require('./src/routes/bachThuDe.routes');
 const schedulerRoutes = require('./src/routes/scheduler.routes');
-const testRoutes = require('./src/routes/test.routes');
 const database = require('./src/config/database');
 const xsmbScheduler = require('./src/services/xsmbScheduler.service');
 const optimizedSoiCauScheduler = require('./src/services/optimizedSoiCauScheduler.service');
@@ -341,7 +340,6 @@ app.use('/api/advanced-gap-analysis', advancedGapAnalysisRoutes);
 app.use('/api/ultra-advanced-soicau', ultraAdvancedSoiCauRoutes);
 app.use('/api/bach-thu-de', bachThuDeRoutes);
 app.use('/api/scheduler', schedulerRoutes);
-app.use('/api/test', testRoutes);
 app.use('/api', uploadRoutes);
 
 // Serve static files from uploads directory
