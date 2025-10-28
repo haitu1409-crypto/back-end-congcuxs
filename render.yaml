@@ -3,8 +3,8 @@ services:
     name: back-end-dande
     env: node
     plan: free
-    buildCommand: npm install --production=false && npm run build
-    startCommand: npm start
+    buildCommand: npm ci --only=production --no-audit --no-fund --prefer-offline
+    startCommand: node start-render.js
     envVars:
       - key: NODE_ENV
         value: production
