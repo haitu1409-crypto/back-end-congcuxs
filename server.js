@@ -12,15 +12,26 @@ const morgan = require('morgan');
 const rateLimit = require('express-rate-limit');
 
 const danDeRoutes = require('./src/routes/dande.routes');
-const thongKeRoutes = require('./src/routes/thongke.routes');
 const articleRoutes = require('./src/routes/article.routes');
 const predictionRoutes = require('./src/routes/prediction.routes');
 const uploadRoutes = require('./src/routes/upload.routes');
+const xsmbScraperRoutes = require('./src/routes/xsmbScraper.routes');
+const soiCauRoutes = require('./src/routes/soiCau.routes');
+const positionSoiCauRoutes = require('./src/routes/positionSoiCau.routes');
+const bayesianRoutes = require('./src/routes/bayesian.routes');
+const soicauPageRoutes = require('./src/routes/soicauPage.routes');
+const advancedGapAnalysisRoutes = require('./src/routes/advancedGapAnalysis.routes');
+const ultraAdvancedSoiCauRoutes = require('./src/routes/ultraAdvancedSoiCau.routes');
+const bachThuDeRoutes = require('./src/routes/bachThuDe.routes');
+const schedulerRoutes = require('./src/routes/scheduler.routes');
+const testRoutes = require('./src/routes/test.routes');
 const database = require('./src/config/database');
+const xsmbScheduler = require('./src/services/xsmbScheduler.service');
+const optimizedSoiCauScheduler = require('./src/services/optimizedSoiCauScheduler.service');
 // Keep-alive middleware removed for Pro version
 
 const app = express();
-const PORT = process.env.PORT || 5001;
+const PORT = process.env.PORT || 5000;
 
 // Security middleware
 app.use(helmet({
@@ -194,16 +205,47 @@ if (process.env.NODE_ENV === 'development') {
     app.use(morgan('combined'));
 }
 
-// Rate limiting để bảo vệ API
+// Rate limiting để bảo vệ API - Tối ưu cho development và production
+const isDevelopment = process.env.NODE_ENV === 'development' || !process.env.NODE_ENV;
+
 const limiter = rateLimit({
     windowMs: parseInt(process.env.RATE_LIMIT_WINDOW_MS) || 15 * 60 * 1000, // 15 minutes
-    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || 100, // limit each IP to 100 requests per windowMs
-    message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau.',
+    max: parseInt(process.env.RATE_LIMIT_MAX_REQUESTS) || (isDevelopment ? 5000 : 2000), // 5000 cho dev, 2000 cho prod
+    message: {
+        error: 'Too Many Requests',
+        message: 'Quá nhiều requests từ IP này, vui lòng thử lại sau.',
+        retryAfter: Math.ceil(15 * 60 * 1000 / 1000) // seconds
+    },
     standardHeaders: true,
     legacyHeaders: false,
+    skip: (req) => {
+        // Skip rate limiting for health checks
+        return req.path === '/health' || req.path === '/healthz' || req.path === '/ping';
+    }
+    // onLimitReached deprecated in express-rate-limit v7 - removed
 });
 
+// Rate limiter riêng cho các API endpoints có thể bị gọi nhiều
+const heavyApiLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, // 5 minutes
+    max: isDevelopment ? 1000 : 500, // Ít hơn cho các API nặng
+    message: {
+        error: 'Too Many Requests',
+        message: 'API này đang được gọi quá nhiều, vui lòng thử lại sau.',
+        retryAfter: Math.ceil(5 * 60 * 1000 / 1000)
+    },
+    standardHeaders: true,
+    legacyHeaders: false
+    // onLimitReached deprecated in express-rate-limit v7 - removed
+});
+
+// Áp dụng rate limiting cho tất cả API routes
 app.use('/api/', limiter);
+
+// Áp dụng rate limiting nặng hơn cho các API cụ thể
+app.use('/api/soicau-page/', heavyApiLimiter);
+app.use('/api/bach-thu-de/', heavyApiLimiter);
+app.use('/api/soicau/', heavyApiLimiter);
 
 // Health check endpoint for UptimeRobot monitoring
 app.get('/health', (req, res) => {
@@ -288,9 +330,18 @@ app.get('/', (req, res) => {
 
 // API routes
 app.use('/api/dande', danDeRoutes);
-app.use('/api/thongke', thongKeRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/predictions', predictionRoutes);
+app.use('/api/xsmb', xsmbScraperRoutes);
+app.use('/api/soicau', soiCauRoutes);
+app.use('/api/position-soicau', positionSoiCauRoutes);
+app.use('/api/bayesian', bayesianRoutes);
+app.use('/api/soicau-page', soicauPageRoutes);
+app.use('/api/advanced-gap-analysis', advancedGapAnalysisRoutes);
+app.use('/api/ultra-advanced-soicau', ultraAdvancedSoiCauRoutes);
+app.use('/api/bach-thu-de', bachThuDeRoutes);
+app.use('/api/scheduler', schedulerRoutes);
+app.use('/api/test', testRoutes);
 app.use('/api', uploadRoutes);
 
 // Serve static files from uploads directory
@@ -346,6 +397,7 @@ const startServer = async () => {
 
                 await connectWithTimeout();
                 console.log('✅ Kết nối MongoDB thành công');
+
             } catch (error) {
                 console.warn('⚠️ MongoDB connection failed:', error.message);
                 console.log('🔄 Server vẫn hoạt động bình thường, sẽ thử kết nối lại...');
@@ -358,9 +410,17 @@ const startServer = async () => {
         // Start MongoDB connection in background
         connectMongoDBInBackground();
 
+        // Initialize XSMB Scheduler
+        xsmbScheduler.init();
+
+        // Initialize Optimized Soi Cầu Scheduler
+        optimizedSoiCauScheduler.init();
+
         // Graceful shutdown
         process.on('SIGTERM', async () => {
             console.log('SIGTERM signal received: closing HTTP server');
+            xsmbScheduler.stop();
+            optimizedSoiCauScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();
@@ -370,6 +430,8 @@ const startServer = async () => {
 
         process.on('SIGINT', async () => {
             console.log('SIGINT signal received: closing HTTP server');
+            xsmbScheduler.stop();
+            optimizedSoiCauScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();

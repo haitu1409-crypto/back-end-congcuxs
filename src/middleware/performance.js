@@ -1,190 +1,133 @@
 /**
- * Performance Middleware
- * Các middleware để tối ưu hóa performance
+ * Performance Optimization Middleware
+ * Tối ưu hóa hiệu suất cho API endpoints
  */
 
 const compression = require('compression');
-const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
-const cacheManager = require('../utils/cache');
+const NodeCache = require('node-cache');
 
-/**
- * Compression middleware
- */
-const compressionMiddleware = compression({
+// Cache configuration
+const cache = new NodeCache({
+    stdTTL: 300, // 5 minutes default
+    checkperiod: 60, // Check for expired keys every minute
+    useClones: false // Don't clone objects for better performance
+});
+
+// Rate limiting configurations
+const createRateLimit = (windowMs, max, message) => rateLimit({
+    windowMs,
+    max,
+    message: { error: message },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => {
+        // Skip rate limiting for internal requests
+        return req.ip === '127.0.0.1' || req.ip === '::1';
+    }
+});
+
+// General API rate limiting
+const generalLimiter = createRateLimit(
+    15 * 60 * 1000, // 15 minutes
+    100, // 100 requests per window
+    'Quá nhiều yêu cầu từ IP này, vui lòng thử lại sau 15 phút'
+);
+
+// Lottery results specific rate limiting
+const lotteryResultsLimiter = createRateLimit(
+    1 * 60 * 1000, // 1 minute
+    30, // 30 requests per minute
+    'Quá nhiều yêu cầu kết quả xổ số, vui lòng thử lại sau 1 phút'
+);
+
+// Cache middleware
+const cacheMiddleware = (ttl = 300) => {
+    return (req, res, next) => {
+        const key = `${req.originalUrl}_${JSON.stringify(req.query)}`;
+        const cached = cache.get(key);
+
+        if (cached) {
+            res.set('X-Cache', 'HIT');
+            return res.json(cached);
+        }
+
+        // Store original res.json
+        const originalJson = res.json;
+        res.json = function (data) {
+            // Cache successful responses only
+            if (res.statusCode === 200) {
+                cache.set(key, data, ttl);
+            }
+            res.set('X-Cache', 'MISS');
+            return originalJson.call(this, data);
+        };
+
+        next();
+    };
+};
+
+// Database query optimization
+const optimizeQuery = (query) => {
+    return {
+        ...query,
+        lean: true, // Return plain objects instead of Mongoose documents
+        limit: Math.min(query.limit || 50, 100), // Cap limit at 100
+        sort: query.sort || { createdAt: -1 }
+    };
+};
+
+// Response compression
+const compressionConfig = compression({
+    level: 6, // Balanced compression
+    threshold: 1024, // Only compress responses > 1KB
     filter: (req, res) => {
-        // Không compress nếu request không muốn
         if (req.headers['x-no-compression']) {
             return false;
         }
-        // Sử dụng compression filter mặc định
         return compression.filter(req, res);
-    },
-    level: 6, // Mức nén trung bình (1-9)
-    threshold: 1024, // Chỉ nén file > 1KB
+    }
 });
 
-/**
- * Security middleware
- */
-const securityMiddleware = helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            styleSrc: ["'self'", "'unsafe-inline'"],
-            scriptSrc: ["'self'"],
-            imgSrc: ["'self'", "data:", "https:"],
-        },
-    },
-    crossOriginEmbedderPolicy: false,
-});
+// Memory usage monitoring
+const memoryMonitor = (req, res, next) => {
+    const memUsage = process.memoryUsage();
+    const memUsageMB = {
+        rss: Math.round(memUsage.rss / 1024 / 1024),
+        heapTotal: Math.round(memUsage.heapTotal / 1024 / 1024),
+        heapUsed: Math.round(memUsage.heapUsed / 1024 / 1024),
+        external: Math.round(memUsage.external / 1024 / 1024)
+    };
 
-/**
- * Rate limiting middleware
- */
-const rateLimitMiddleware = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 phút
-    max: 100, // Tối đa 100 requests per window
-    message: {
-        success: false,
-        message: 'Quá nhiều requests, vui lòng thử lại sau.'
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-    // Skip successful requests
-    skipSuccessfulRequests: false,
-    // Skip failed requests
-    skipFailedRequests: true,
-});
-
-/**
- * API Rate limiting - nghiêm ngặt hơn
- */
-const apiRateLimitMiddleware = rateLimit({
-    windowMs: 1 * 60 * 1000, // 1 phút
-    max: 200, // Tối đa 200 requests per minute (increased for development)
-    message: {
-        success: false,
-        message: 'API rate limit exceeded. Vui lòng thử lại sau.'
-    },
-    standardHeaders: true,
-    legacyHeaders: false,
-});
-
-/**
- * Response time middleware
- */
-const responseTimeMiddleware = (req, res, next) => {
-    const startTime = Date.now();
-
-    res.on('finish', () => {
-        const duration = Date.now() - startTime;
-        res.setHeader('X-Response-Time', `${duration}ms`);
-
-        // Log slow requests
-        if (duration > 1000) {
-            console.warn(`Slow request: ${req.method} ${req.originalUrl} - ${duration}ms`);
-        }
-    });
-
+    res.set('X-Memory-Usage', JSON.stringify(memUsageMB));
     next();
 };
 
-/**
- * Request logging middleware
- */
-const requestLoggingMiddleware = (req, res, next) => {
-    const startTime = new Date();
-
-    // Log request
-    console.log(`${startTime.toISOString()} - ${req.method} ${req.originalUrl} - IP: ${req.ip}`);
-
-    // Log response
-    res.on('finish', () => {
-        const duration = Date.now() - startTime.getTime();
-        console.log(`${new Date().toISOString()} - ${req.method} ${req.originalUrl} - ${res.statusCode} - ${duration}ms`);
-    });
-
-    next();
+// Cache statistics
+const getCacheStats = () => {
+    const stats = cache.getStats();
+    return {
+        keys: stats.keys,
+        hits: stats.hits,
+        misses: stats.misses,
+        hitRate: stats.hits / (stats.hits + stats.misses) * 100
+    };
 };
 
-/**
- * Error handling middleware
- */
-const errorHandlingMiddleware = (err, req, res, next) => {
-    console.error('Error:', err);
-
-    // Mongoose validation error
-    if (err.name === 'ValidationError') {
-        return res.status(400).json({
-            success: false,
-            message: 'Dữ liệu không hợp lệ',
-            errors: Object.values(err.errors).map(e => e.message)
-        });
-    }
-
-    // Mongoose cast error
-    if (err.name === 'CastError') {
-        return res.status(400).json({
-            success: false,
-            message: 'ID không hợp lệ'
-        });
-    }
-
-    // MongoDB duplicate key error
-    if (err.code === 11000) {
-        return res.status(409).json({
-            success: false,
-            message: 'Dữ liệu đã tồn tại'
-        });
-    }
-
-    // Default error
-    res.status(500).json({
-        success: false,
-        message: process.env.NODE_ENV === 'production'
-            ? 'Lỗi server nội bộ'
-            : err.message
-    });
-};
-
-/**
- * Cache stats middleware - để debug
- */
-const cacheStatsMiddleware = (req, res, next) => {
-    if (req.query.cache_stats === 'true') {
-        return res.json({
-            success: true,
-            data: cacheManager.getStats()
-        });
-    }
-    next();
-};
-
-/**
- * Health check middleware
- */
-const healthCheckMiddleware = (req, res, next) => {
-    if (req.path === '/health') {
-        return res.json({
-            success: true,
-            timestamp: new Date().toISOString(),
-            uptime: process.uptime(),
-            memory: process.memoryUsage(),
-            cache: cacheManager.getStats()
-        });
-    }
-    next();
+// Clear cache endpoint
+const clearCache = (req, res) => {
+    cache.flushAll();
+    res.json({ message: 'Cache cleared successfully' });
 };
 
 module.exports = {
-    compressionMiddleware,
-    securityMiddleware,
-    rateLimitMiddleware,
-    apiRateLimitMiddleware,
-    responseTimeMiddleware,
-    requestLoggingMiddleware,
-    errorHandlingMiddleware,
-    cacheStatsMiddleware,
-    healthCheckMiddleware
+    cache,
+    generalLimiter,
+    lotteryResultsLimiter,
+    cacheMiddleware,
+    optimizeQuery,
+    compressionConfig,
+    memoryMonitor,
+    getCacheStats,
+    clearCache
 };
