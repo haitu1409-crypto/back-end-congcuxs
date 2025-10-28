@@ -293,9 +293,6 @@ class UltraAdvancedSoiCauService {
         // Multi-layer perceptron
         const mlpPredictions = this.multiLayerPerceptron(quantumProbs, deepFeatures);
 
-        // Long Short-Term Memory
-        const lstmPredictions = this.longShortTermMemory(quantumProbs, deepFeatures);
-
         // Gated Recurrent Unit
         const gruPredictions = this.gatedRecurrentUnit(quantumProbs, deepFeatures);
 
@@ -305,11 +302,10 @@ class UltraAdvancedSoiCauService {
         // Combine all neural networks
         Object.keys(quantumProbs).forEach(num => {
             const mlp = mlpPredictions[num] || 0;
-            const lstm = lstmPredictions[num] || 0;
             const gru = gruPredictions[num] || 0;
             const attention = attentionPredictions[num] || 0;
 
-            const ensembleScore = (mlp * 0.3 + lstm * 0.3 + gru * 0.2 + attention * 0.2);
+            const ensembleScore = (mlp * 0.4 + gru * 0.3 + attention * 0.3);
 
             predictions.push({
                 number: num,
@@ -317,7 +313,6 @@ class UltraAdvancedSoiCauService {
                 percentage: (ensembleScore * 100).toFixed(2),
                 neuralComponents: {
                     mlp: mlp,
-                    lstm: lstm,
                     gru: gru,
                     attention: attention
                 }
@@ -848,13 +843,6 @@ class UltraAdvancedSoiCauService {
         const probs = {};
         Object.keys(quantumProbs).forEach(num => {
             probs[num] = quantumProbs[num] * (0.8 + Math.random() * 0.4);
-        });
-        return probs;
-    }
-    longShortTermMemory(quantumProbs, deepFeatures) {
-        const probs = {};
-        Object.keys(quantumProbs).forEach(num => {
-            probs[num] = quantumProbs[num] * (0.7 + Math.random() * 0.6);
         });
         return probs;
     }
