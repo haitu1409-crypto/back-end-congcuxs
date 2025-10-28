@@ -3,7 +3,7 @@ services:
     name: back-end-dande
     env: node
     plan: free
-    buildCommand: chmod +x build.sh && ./build.sh
+    buildCommand: npm run build
     startCommand: node start-render.js
     envVars:
       - key: NODE_ENV

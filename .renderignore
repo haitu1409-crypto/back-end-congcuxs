@@ -69,3 +69,7 @@ build/
 # Temporary files
 tmp/
 temp/
+
+# Render specific
+build.sh
+railway.json

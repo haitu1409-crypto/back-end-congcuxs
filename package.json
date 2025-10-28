@@ -12,7 +12,7 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "health": "curl http://localhost:5000/health",
     "ping": "curl http://localhost:5000/ping",
-    "build": "echo 'Build completed - no build step required'",
+    "build": "npm ci --only=production --no-audit --no-fund --prefer-offline",
     "postinstall": "echo '✅ Dependencies installed successfully'",
     "preinstall": "echo '📦 Installing dependencies...'"
   },
