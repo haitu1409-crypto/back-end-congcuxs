@@ -123,7 +123,6 @@ const soicauSchema = new mongoose.Schema({
     timestamps: true,
     indexes: [
         { predictionDate: 1, drawDate: 1 },
-        { predictionDate: -1 },
         { drawDate: -1 },
         { 'actualResults.isProcessed': 1 },
         { 'accuracyStats.cdmDe.isCorrect': 1 },
