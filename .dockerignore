@@ -1,0 +1,51 @@
+# Dependencies
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Test files
+tests/
+test-*.js
+debug-*.js
+check-*.js
+compare-*.js
+clear-cache.js
+run-tests.js
+start-and-test.js
+
+# Debug files
+*.json
+!package.json
+!package-lock.json
+
+# Logs
+logs
+*.log
+
+# Environment files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Git
+.git
+.gitignore
+
+# Documentation
+*.md
+!README.md
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Temporary files
+tmp/
+temp/
