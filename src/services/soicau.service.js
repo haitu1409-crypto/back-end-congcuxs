@@ -321,6 +321,310 @@ class SoiCauService {
     }
 
     /**
+     * Lấy lịch sử soi cầu chi tiết với trạng thái và kết quả
+     * @param {number} limit - Số bản ghi tối đa
+     * @param {number} days - Số ngày gần nhất
+     * @param {string} type - Loại dự đoán (de/lo)
+     * @returns {Array} Lịch sử soi cầu chi tiết
+     */
+    async getDetailedSoiCauHistory(limit = 14, days = 14, type = 'de') {
+        try {
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - days);
+
+            // Lấy tất cả dữ liệu soi cầu trong khoảng thời gian
+            const history = await SoiCau.find({
+                predictionDate: { $gte: startDate }
+            })
+                .sort({ predictionDate: -1 })
+                .limit(limit)
+                .lean();
+
+            // Xử lý từng bản ghi để tạo dữ liệu chi tiết
+            const detailedHistory = await Promise.all(history.map(async (record) => {
+                const predictionDate = new Date(record.predictionDate);
+                const today = new Date();
+                const isWaiting = predictionDate > today;
+
+                // Lấy predictions theo type
+                let predictions = [];
+                if (type === 'de') {
+                    // Đề: lấy từ ensemble (tổng hợp tất cả methods)
+                    predictions = record.predictions?.ensemble || [];
+                } else {
+                    // Lô: lấy từ cdm.lo, fallback sang efdm.lo, cuối cùng mới ensemble
+                    // (bỏ qua collaborativeFiltering vì thường có probability = 0)
+                    predictions = record.predictions?.cdm?.lo ||
+                        record.predictions?.efdm?.lo ||
+                        record.predictions?.ensemble || [];
+                }
+
+                // Tạo nuôi khung (framing strategy) - cố định 3 ngày
+                const framingStrategy = this.generateFramingStrategy(predictions, type);
+
+                // Xác định kết quả thực tế theo khung 3 ngày
+                let actualResult = 'Đang chờ...';
+                let resultClass = 'waiting';
+
+                if (type === 'de') {
+                    // Đề: kiểm tra khung 3 ngày (ngày dự đoán + 2 ngày sau)
+                    const frameResult = await this.checkDeFrameResult(predictionDate, predictions);
+                    actualResult = frameResult.result;
+                    resultClass = frameResult.class;
+                } else {
+                    // Lô: kiểm tra khung 3 ngày
+                    const frameResult = await this.checkLoFrameResult(predictionDate, predictions);
+                    actualResult = frameResult.result;
+                    resultClass = frameResult.class;
+                }
+
+                return {
+                    date: predictionDate.toLocaleDateString('vi-VN'),
+                    predictions: predictions.map(p => p.number).join(', '),
+                    framingStrategy: framingStrategy,
+                    actualResult: actualResult,
+                    resultClass: resultClass,
+                    predictionDate: predictionDate,
+                    isWaiting: isWaiting
+                };
+            }));
+
+            return detailedHistory;
+        } catch (error) {
+            console.error('❌ Error getting detailed soi cầu history:', error);
+            throw error;
+        }
+    }
+
+    /**
+     * Kiểm tra kết quả đề theo khung 3 ngày
+     * @param {Date} predictionDate - Ngày dự đoán
+     * @param {Array} predictions - Danh sách dự đoán
+     * @returns {Object} Kết quả kiểm tra
+     */
+    async checkDeFrameResult(predictionDate, predictions) {
+        try {
+            const today = new Date();
+            const predictedNumbers = predictions.map(p => p.number);
+
+            // Tính ngày kết thúc khung (ngày dự đoán + 2 ngày)
+            const frameEndDate = new Date(predictionDate);
+            frameEndDate.setDate(frameEndDate.getDate() + 2);
+
+            // Nếu chưa đến ngày dự đoán
+            if (predictionDate > today) {
+                return {
+                    result: 'Đang chờ...',
+                    class: 'waiting'
+                };
+            }
+
+            // Nếu chưa hết khung 3 ngày
+            if (frameEndDate > today) {
+                return {
+                    result: 'Đang chờ...',
+                    class: 'waiting'
+                };
+            }
+
+            // Kiểm tra kết quả trong khung 3 ngày
+            const XSMB = require('../models/xsmb.model');
+            let hitDay = null;
+            let hitNumber = null;
+
+            for (let i = 0; i < 3; i++) {
+                const checkDate = new Date(predictionDate);
+                checkDate.setDate(checkDate.getDate() + i);
+
+                try {
+                    const xsmbData = await XSMB.findByDate(checkDate);
+                    if (xsmbData && xsmbData.specialPrize) {
+                        const specialPrize = xsmbData.specialPrize.toString();
+                        const lastTwoDigits = specialPrize.slice(-2);
+
+                        if (predictedNumbers.includes(lastTwoDigits)) {
+                            hitDay = checkDate.toLocaleDateString('vi-VN');
+                            hitNumber = lastTwoDigits;
+                            break;
+                        }
+                    }
+                } catch (err) {
+                    // Không có dữ liệu cho ngày này, tiếp tục
+                    continue;
+                }
+            }
+
+            if (hitDay && hitNumber) {
+                return {
+                    result: `${hitNumber} (ngày ${hitDay})`,
+                    class: 'hit'
+                };
+            } else {
+                return {
+                    result: 'Trượt',
+                    class: 'miss'
+                };
+            }
+        } catch (error) {
+            console.error('❌ Error checking DE frame result:', error);
+            return {
+                result: 'Lỗi kiểm tra',
+                class: 'waiting'
+            };
+        }
+    }
+
+    /**
+     * Kiểm tra kết quả lô theo khung 3 ngày
+     * @param {Date} predictionDate - Ngày dự đoán
+     * @param {Array} predictions - Danh sách dự đoán
+     * @returns {Object} Kết quả kiểm tra
+     */
+    async checkLoFrameResult(predictionDate, predictions) {
+        try {
+            const today = new Date();
+            const predictedNumbers = predictions.map(p => p.number);
+
+            // Tính ngày kết thúc khung (ngày dự đoán + 2 ngày)
+            const frameEndDate = new Date(predictionDate);
+            frameEndDate.setDate(frameEndDate.getDate() + 2);
+
+            // Nếu chưa đến ngày dự đoán
+            if (predictionDate > today) {
+                return {
+                    result: 'Đang chờ...',
+                    class: 'waiting'
+                };
+            }
+
+            // Nếu chưa hết khung 3 ngày
+            if (frameEndDate > today) {
+                return {
+                    result: 'Đang chờ...',
+                    class: 'waiting'
+                };
+            }
+
+            // Kiểm tra kết quả trong khung 3 ngày
+            const XSMB = require('../models/xsmb.model');
+            let hitNumbers = [];
+            let hitDays = [];
+
+            for (let i = 0; i < 3; i++) {
+                const checkDate = new Date(predictionDate);
+                checkDate.setDate(checkDate.getDate() + i);
+
+                try {
+                    const xsmbData = await XSMB.findByDate(checkDate);
+                    if (xsmbData) {
+                        // Lấy tất cả 2 số cuối từ các giải
+                        const allNumbers = [];
+                        if (xsmbData.specialPrize) allNumbers.push(xsmbData.specialPrize.toString().slice(-2));
+                        if (xsmbData.firstPrize) allNumbers.push(xsmbData.firstPrize.toString().slice(-2));
+                        if (xsmbData.secondPrize) {
+                            xsmbData.secondPrize.forEach(prize => {
+                                allNumbers.push(prize.toString().slice(-2));
+                            });
+                        }
+                        if (xsmbData.threePrizes) {
+                            xsmbData.threePrizes.forEach(prize => {
+                                allNumbers.push(prize.toString().slice(-2));
+                            });
+                        }
+                        if (xsmbData.fourPrizes) {
+                            xsmbData.fourPrizes.forEach(prize => {
+                                allNumbers.push(prize.toString().slice(-2));
+                            });
+                        }
+                        if (xsmbData.fivePrizes) {
+                            xsmbData.fivePrizes.forEach(prize => {
+                                allNumbers.push(prize.toString().slice(-2));
+                            });
+                        }
+                        if (xsmbData.sixPrizes) {
+                            xsmbData.sixPrizes.forEach(prize => {
+                                allNumbers.push(prize.toString().slice(-2));
+                            });
+                        }
+                        if (xsmbData.sevenPrizes) {
+                            xsmbData.sevenPrizes.forEach(prize => {
+                                allNumbers.push(prize.toString().slice(-2));
+                            });
+                        }
+
+                        // Kiểm tra số trúng
+                        const dayHitNumbers = predictedNumbers.filter(num => allNumbers.includes(num));
+                        if (dayHitNumbers.length > 0) {
+                            hitNumbers.push(...dayHitNumbers);
+                            hitDays.push(checkDate.toLocaleDateString('vi-VN'));
+                        }
+                    }
+                } catch (err) {
+                    // Không có dữ liệu cho ngày này, tiếp tục
+                    continue;
+                }
+            }
+
+            if (hitNumbers.length > 0) {
+                const uniqueHitNumbers = [...new Set(hitNumbers)];
+                const uniqueHitDays = [...new Set(hitDays)];
+                return {
+                    result: `${uniqueHitNumbers.join(', ')} (ngày ${uniqueHitDays.join(', ')})`,
+                    class: 'hit'
+                };
+            } else {
+                return {
+                    result: 'Trượt',
+                    class: 'miss'
+                };
+            }
+        } catch (error) {
+            console.error('❌ Error checking LO frame result:', error);
+            return {
+                result: 'Lỗi kiểm tra',
+                class: 'waiting'
+            };
+        }
+    }
+
+    /**
+     * Tạo chiến lược nuôi khung (cố định 3 ngày)
+     * @param {Array} predictions - Danh sách dự đoán
+     * @param {string} type - Loại dự đoán
+     * @returns {Array} Chiến lược nuôi khung
+     */
+    generateFramingStrategy(predictions, type) {
+        const strategies = [];
+
+        // Chia predictions thành các nhóm 3 ngày
+        const groupSize = 3;
+        for (let i = 0; i < predictions.length; i += groupSize) {
+            const group = predictions.slice(i, i + groupSize);
+            if (group.length > 0) {
+                strategies.push({
+                    numbers: group.map(p => p.number),
+                    days: 3 // Cố định 3 ngày
+                });
+            }
+        }
+
+        return strategies;
+    }
+
+
+    /**
+     * Tính số ngày trúng
+     * @param {Date} predictionDate - Ngày dự đoán
+     * @param {Date} drawDate - Ngày xổ
+     * @param {number} hitCount - Số lần trúng
+     * @returns {string} Mô tả ngày trúng
+     */
+    calculateHitDays(predictionDate, drawDate, hitCount) {
+        const daysDiff = Math.ceil((drawDate - predictionDate) / (1000 * 60 * 60 * 24));
+        return `${hitCount}/${daysDiff}`;
+    }
+
+    /**
      * Lấy thống kê độ chính xác
      * @param {number} days - Số ngày gần nhất
      * @returns {Object} Thống kê độ chính xác

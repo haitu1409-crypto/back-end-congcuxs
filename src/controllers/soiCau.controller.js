@@ -109,12 +109,26 @@ const applyPascal = async (results, diamondResult, pairResult, historicalPredict
     let pascalResult = result.join('').padStart(2, '0');
 
     const frequencies = await calculateFrequencies(results, 'xsmb', results.length);
-    const topNumbers = frequencies.slice(0, 5).map(item => item.number);
+    const topNumbers = frequencies.slice(0, 10).map(item => item.number); // Tăng từ 5 lên 10
 
-    // Avoid repetition with historical predictions
+    // TỐI ƯU: Thêm yếu tố ngẫu nhiên để tránh trùng lặp
+    const currentDate = new Date();
+    const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+    const randomSeed = (parseInt(specialPrize.slice(-1)) + parseInt(firstPrize.slice(-1)) + dayOfYear) % 100;
+
+    // Avoid repetition with historical predictions - nhưng không quá strict
     const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
     if (historicalNumbers.includes(pascalResult) && topNumbers.length > 0) {
-        pascalResult = topNumbers.find(num => !historicalNumbers.includes(num)) || pascalResult;
+        // Thêm logic chọn số dựa trên ngày để tạo sự đa dạng
+        const availableNumbers = topNumbers.filter(num => !historicalNumbers.includes(num));
+        if (availableNumbers.length > 0) {
+            const index = randomSeed % availableNumbers.length;
+            pascalResult = availableNumbers[index];
+        } else {
+            // Nếu tất cả số đều đã được dự đoán, chọn dựa trên ngày
+            const index = randomSeed % topNumbers.length;
+            pascalResult = topNumbers[index];
+        }
     }
 
     if (topNumbers.includes(pascalResult)) {
@@ -166,12 +180,25 @@ const applyDiamondShape = async (results, numDays, historicalPredictions) => {
             return '';
         }
 
-        // Avoid repetition with historical predictions
+        // TỐI ƯU: Thêm yếu tố ngẫu nhiên dựa trên ngày
+        const currentDate = new Date();
+        const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+        const randomSeed = (dayOfYear + parseInt(diamondResult)) % 100;
+
+        // Avoid repetition with historical predictions - nhưng không quá strict
         const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
         if (historicalNumbers.includes(diamondResult)) {
             const frequencies = await calculateFrequencies(results, 'xsmb', numDays);
-            const topNumbers = frequencies.slice(0, 5).map(item => item.number);
-            diamondResult = topNumbers.find(num => !historicalNumbers.includes(num) && !ganNumbers.includes(num)) || '';
+            const topNumbers = frequencies.slice(0, 10).map(item => item.number); // Tăng từ 5 lên 10
+            const availableNumbers = topNumbers.filter(num => !historicalNumbers.includes(num) && !ganNumbers.includes(num));
+            if (availableNumbers.length > 0) {
+                const index = randomSeed % availableNumbers.length;
+                diamondResult = availableNumbers[index];
+            } else {
+                // Fallback với yếu tố ngẫu nhiên
+                const index = randomSeed % topNumbers.length;
+                diamondResult = topNumbers[index];
+            }
         }
     }
     return diamondResult || lastTwoDigits[0] || '';
@@ -184,9 +211,22 @@ const applyFrequencyPairs = async (results, historicalPredictions) => {
     const frequencies = await calculateFrequencies(recentResults, 'xsmb', recentResults.length);
     if (frequencies.length === 0) return '';
 
+    // TỐI ƯU: Thêm yếu tố ngẫu nhiên dựa trên ngày
+    const currentDate = new Date();
+    const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+    const randomSeed = (dayOfYear + frequencies.length) % 100;
+
     const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
-    const topPair = frequencies.find(item => !historicalNumbers.includes(item.number)) || frequencies[0];
-    return topPair ? topPair.number : '';
+    const availableNumbers = frequencies.filter(item => !historicalNumbers.includes(item.number));
+
+    if (availableNumbers.length > 0) {
+        const index = randomSeed % availableNumbers.length;
+        return availableNumbers[index].number;
+    } else {
+        // Fallback với yếu tố ngẫu nhiên
+        const index = randomSeed % frequencies.length;
+        return frequencies[index].number;
+    }
 };
 
 // Gan and Frequency Combination method
@@ -194,12 +234,30 @@ const applyGanFrequency = async (results, numDays, historicalPredictions) => {
     if (!results.length) return '';
     const ganNumbers = await calculateGanNumbers(results, 'xsmb', numDays);
     const frequencies = await calculateFrequencies(results, 'xsmb', numDays);
-    const nearGanNumbers = ganNumbers.slice(0, Math.min(5, ganNumbers.length));
-    const highFreqNumbers = frequencies.slice(0, 5).map(item => item.number);
+    const nearGanNumbers = ganNumbers.slice(0, Math.min(10, ganNumbers.length)); // Tăng từ 5 lên 10
+    const highFreqNumbers = frequencies.slice(0, 10).map(item => item.number); // Tăng từ 5 lên 10
+
+    // TỐI ƯU: Thêm yếu tố ngẫu nhiên dựa trên ngày
+    const currentDate = new Date();
+    const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+    const randomSeed = (dayOfYear + nearGanNumbers.length) % 100;
 
     const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
-    const candidate = nearGanNumbers.find(num => highFreqNumbers.includes(num) && !historicalNumbers.includes(num));
-    return candidate || highFreqNumbers.find(num => !historicalNumbers.includes(num)) || highFreqNumbers[0] || '';
+    const availableCandidates = nearGanNumbers.filter(num => highFreqNumbers.includes(num) && !historicalNumbers.includes(num));
+
+    if (availableCandidates.length > 0) {
+        const index = randomSeed % availableCandidates.length;
+        return availableCandidates[index];
+    } else {
+        const availableHighFreq = highFreqNumbers.filter(num => !historicalNumbers.includes(num));
+        if (availableHighFreq.length > 0) {
+            const index = randomSeed % availableHighFreq.length;
+            return availableHighFreq[index];
+        } else {
+            const index = randomSeed % highFreqNumbers.length;
+            return highFreqNumbers[index];
+        }
+    }
 };
 
 // Lô rơi method
@@ -218,9 +276,27 @@ const applyLoRoi = async (results, historicalPredictions) => {
     const lastTwoDigitsRecent = getLastTwoDigits(results[0]);
     const lastTwoDigitsPrevious = getLastTwoDigits(results[1]);
 
+    // TỐI ƯU: Thêm yếu tố ngẫu nhiên dựa trên ngày
+    const currentDate = new Date();
+    const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
+    const randomSeed = (dayOfYear + lastTwoDigitsRecent.length) % 100;
+
     const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
-    const loRoi = lastTwoDigitsRecent.find(num => lastTwoDigitsPrevious.includes(num) && !historicalNumbers.includes(num));
-    return loRoi || lastTwoDigitsRecent.find(num => !historicalNumbers.includes(num)) || '';
+    const availableLoRoi = lastTwoDigitsRecent.filter(num => lastTwoDigitsPrevious.includes(num) && !historicalNumbers.includes(num));
+
+    if (availableLoRoi.length > 0) {
+        const index = randomSeed % availableLoRoi.length;
+        return availableLoRoi[index];
+    } else {
+        const availableRecent = lastTwoDigitsRecent.filter(num => !historicalNumbers.includes(num));
+        if (availableRecent.length > 0) {
+            const index = randomSeed % availableRecent.length;
+            return availableRecent[index];
+        } else {
+            const index = randomSeed % lastTwoDigitsRecent.length;
+            return lastTwoDigitsRecent[index];
+        }
+    }
 };
 
 // Calculate historical hit rates

@@ -15,7 +15,16 @@ class DailyDataCollectionService {
         this.probabilityStatsService = new ProbabilityStatisticsService();
         this.advancedGapAnalysisService = AdvancedGapAnalysisService;
         this.ultraAdvancedSoiCauService = UltraAdvancedSoiCauService;
-        console.log('✅ DailyDataCollectionService initialized');
+
+        // TỐI ƯU: Thêm cache cho service
+        const NodeCache = require('node-cache');
+        this.cache = new NodeCache({
+            stdTTL: 300, // 5 phút cache
+            checkperiod: 60, // Check expired keys mỗi 1 phút
+            useClones: false // Tối ưu memory
+        });
+
+        console.log('✅ DailyDataCollectionService initialized with cache');
     }
 
     /**
@@ -267,6 +276,15 @@ class DailyDataCollectionService {
      * @returns {Object} Dữ liệu soi cầu
      */
     async getDailyData(date) {
+        const cacheKey = `daily:${date.toISOString().split('T')[0]}`;
+
+        // TỐI ƯU: Kiểm tra cache trước
+        const cached = this.cache.get(cacheKey);
+        if (cached) {
+            console.log(`📦 Cache hit for daily data: ${cacheKey}`);
+            return cached;
+        }
+
         const dailyData = await DailySoiCauData.getByPredictionDate(date);
 
         if (!dailyData) {
@@ -276,6 +294,10 @@ class DailyDataCollectionService {
         if (dailyData.metadata.status !== 'completed') {
             throw new Error(`Dữ liệu soi cầu cho ngày ${date.toISOString().split('T')[0]} chưa hoàn thành`);
         }
+
+        // TỐI ƯU: Cache kết quả
+        this.cache.set(cacheKey, dailyData);
+        console.log(`📦 Cached daily data: ${cacheKey}`);
 
         return dailyData;
     }
@@ -364,19 +386,65 @@ class DailyDataCollectionService {
 
             // Tạo predictions object theo cấu trúc SoiCau model
             const predictionsObj = {};
-            if (method === 'ensemble') {
-                // Đảm bảo predictions có đúng format cho SoiCau model
-                predictionsObj.ensemble = predictions.map(pred => ({
-                    number: pred.number,
-                    probability: pred.probability,
-                    percentage: pred.percentage
-                }));
-            } else if (method === 'cdm') {
+
+            // Luôn tạo ensemble predictions
+            predictionsObj.ensemble = predictions.map(pred => ({
+                number: pred.number,
+                probability: pred.probability,
+                percentage: pred.percentage
+            }));
+
+            // Tạo predictions cho method riêng lẻ nếu không phải ensemble
+            if (method === 'cdm') {
                 predictionsObj.cdm = { [type]: predictions };
             } else if (method === 'efdm') {
                 predictionsObj.efdm = { [type]: predictions };
             } else if (method === 'cf') {
                 predictionsObj.collaborativeFiltering = predictions;
+            } else if (method === 'ensemble') {
+                // Khi dùng ensemble, cũng tạo predictions cho các method riêng lẻ
+                try {
+                    // Tạo CDM predictions
+                    if (type === 'de') {
+                        const cdmDeProbs = await this.bayesianService.calculateDeProbabilities(targetDate, 30);
+                        predictionsObj.cdm = {
+                            de: this.convertProbabilitiesToPredictions(cdmDeProbs, limit),
+                            lo: []
+                        };
+                    } else {
+                        const cdmLoProbs = await this.bayesianService.calculateLoProbabilities(targetDate, 30);
+                        predictionsObj.cdm = {
+                            de: [],
+                            lo: this.convertProbabilitiesToPredictions(cdmLoProbs, limit)
+                        };
+                    }
+
+                    // Tạo EFDM predictions
+                    if (type === 'de') {
+                        const efdmDeProbs = await this.efdmService.calculateDeProbabilities(targetDate, 30);
+                        predictionsObj.efdm = {
+                            de: this.convertProbabilitiesToPredictions(efdmDeProbs, limit),
+                            lo: []
+                        };
+                    } else {
+                        const efdmLoProbs = await this.efdmService.calculateLoProbabilities(targetDate, 30);
+                        predictionsObj.efdm = {
+                            de: [],
+                            lo: this.convertProbabilitiesToPredictions(efdmLoProbs, limit)
+                        };
+                    }
+
+                    // Tạo Collaborative Filtering predictions
+                    const cfProbs = await this.collaborativeFilteringService.predict(targetDate, 30, type, 5);
+                    predictionsObj.collaborativeFiltering = this.convertProbabilitiesToPredictions(cfProbs, limit);
+
+                } catch (error) {
+                    console.warn('⚠️ Could not generate individual method predictions:', error.message);
+                    // Nếu không tạo được, để trống
+                    if (!predictionsObj.cdm) predictionsObj.cdm = { de: [], lo: [] };
+                    if (!predictionsObj.efdm) predictionsObj.efdm = { de: [], lo: [] };
+                    if (!predictionsObj.collaborativeFiltering) predictionsObj.collaborativeFiltering = [];
+                }
             }
 
             const soiCauData = {

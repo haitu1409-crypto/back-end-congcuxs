@@ -178,19 +178,22 @@ router.get('/date/:date', async (req, res) => {
             return res.json(cachedData);
         }
 
-        // Thử lấy từ DailyDataCollectionService trước (dữ liệu mới)
+        // TỐI ƯU: Chỉ sử dụng DailyDataCollectionService (hệ thống mới)
+        // Loại bỏ SoiCauService cũ để tránh xung đột logic
         try {
             const dailyData = await dailyDataCollectionService.getDailyData(targetDate);
             console.log(`📋 Lấy dữ liệu từ DailyDataCollectionService cho ngày ${date}`);
 
-            // Chuyển đổi format để tương thích với frontend
+            // Format chuẩn cho frontend
             const soiCauData = {
                 predictionDate: dailyData.predictionDate,
                 drawDate: dailyData.predictionDate,
                 predictions: dailyData.predictions,
                 probabilityStatistics: dailyData.probabilityStatistics,
                 historicalData: dailyData.historicalData,
-                metadata: dailyData.metadata
+                metadata: dailyData.metadata,
+                // Thêm thông tin để frontend biết có dữ liệu
+                hasData: true
             };
 
             const response = {
@@ -201,29 +204,16 @@ router.get('/date/:date', async (req, res) => {
             res.json(response);
             return;
         } catch (dbError) {
-            console.log(`⚠️ Không tìm thấy dữ liệu trong DailyDataCollectionService, thử SoiCauService: ${dbError.message}`);
+            console.log(`⚠️ Không tìm thấy dữ liệu trong DailyDataCollectionService: ${dbError.message}`);
         }
 
-        // Fallback sang SoiCauService (legacy)
-        try {
-            const soiCau = await soiCauService.getSoiCauByDate(targetDate);
-            const response = {
-                success: true,
-                data: soiCau
-            };
-            setCachedData(cacheKey, response);
-            res.json(response);
-        } catch (soiCauError) {
-            console.log(`⚠️ Không tìm thấy dữ liệu trong SoiCauService: ${soiCauError.message}`);
-            // Trả về response thành công với dữ liệu rỗng thay vì 404
-            const response = {
-                success: true,
-                data: null,
-                message: `Chưa có dữ liệu soi cầu cho ngày ${date}`
-            };
-            setCachedData(cacheKey, response);
-            res.json(response);
-        }
+        // Không tìm thấy dữ liệu - Trả về 200 với data null (không phải 404)
+        res.status(200).json({
+            success: true,
+            message: `Chưa có dữ liệu soi cầu cho ngày ${date}`,
+            data: null,
+            hasData: false
+        });
 
     } catch (error) {
         console.error('❌ Date Soi Cầu Error:', error.message);
@@ -304,7 +294,9 @@ router.get('/predictions/:method/:type?', async (req, res) => {
         }
 
         // Thử lấy từ DailyDataCollectionService trước
-        let predictions;
+        let predictions = [];
+        let hasData = false;
+
         try {
             predictions = await dailyDataCollectionService.getTopPredictions(
                 targetDate,
@@ -313,16 +305,25 @@ router.get('/predictions/:method/:type?', async (req, res) => {
                 parseInt(limit)
             );
             console.log(`📋 Lấy predictions từ DailyDataCollectionService cho ${method}-${type || 'de'}`);
+            hasData = true;
         } catch (dbError) {
             console.log(`⚠️ Không tìm thấy dữ liệu trong DailyDataCollectionService, fallback sang SoiCauService: ${dbError.message}`);
-            predictions = await soiCauService.getTopPredictions(
-                targetDate,
-                method,
-                type || 'de',
-                parseInt(limit)
-            );
+            try {
+                predictions = await soiCauService.getTopPredictions(
+                    targetDate,
+                    method,
+                    type || 'de',
+                    parseInt(limit)
+                );
+                hasData = true;
+            } catch (fallbackError) {
+                console.log(`⚠️ Không tìm thấy dữ liệu trong SoiCauService: ${fallbackError.message}`);
+                hasData = false;
+                predictions = [];
+            }
         }
 
+        // Trả về response thành công (200) ngay cả khi không có dữ liệu
         res.json({
             success: true,
             data: {
@@ -330,7 +331,8 @@ router.get('/predictions/:method/:type?', async (req, res) => {
                 type: type || 'de',
                 date: targetDate.toISOString().split('T')[0],
                 limit: parseInt(limit),
-                predictions
+                predictions: predictions || [],
+                hasData: hasData
             }
         });
 
@@ -371,6 +373,42 @@ router.get('/history', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Lỗi khi lấy lịch sử soi cầu',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Lịch sử soi cầu chi tiết với trạng thái và kết quả
+ * GET /api/soicau-page/history-detailed?limit=14&days=14&type=de
+ */
+router.get('/history-detailed', async (req, res) => {
+    try {
+        const { limit = 14, days = 14, type = 'de' } = req.query;
+
+        console.log(`📊 Getting detailed history for ${type} - ${limit} records, ${days} days`);
+
+        const detailedHistory = await soiCauService.getDetailedSoiCauHistory(
+            parseInt(limit),
+            parseInt(days),
+            type
+        );
+
+        res.json({
+            success: true,
+            data: {
+                limit: parseInt(limit),
+                days: parseInt(days),
+                type,
+                history: detailedHistory
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ Detailed History Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy lịch sử soi cầu chi tiết',
             error: error.message
         });
     }
@@ -618,6 +656,68 @@ router.get('/probability-stats/:date', async (req, res) => {
         res.status(500).json({
             success: false,
             message: 'Lỗi khi lấy thống kê xác suất',
+            error: error.message
+        });
+    }
+});
+
+/**
+ * Lịch sử dự đoán bạch thủ lô từ database thực tế
+ * GET /api/soicau-page/history-lo?limit=14&days=14
+ */
+router.get('/history-lo', async (req, res) => {
+    try {
+        const { limit = 14, days = 14 } = req.query;
+
+        console.log(`📊 Getting bach thu lo history from database - ${limit} records, ${days} days`);
+
+        // Lấy dữ liệu từ SoiCauResult model (hệ thống soi cầu truyền thống)
+        const SoiCauResult = require('../models/soiCauResult.model');
+
+        // Lấy lịch sử từ database
+        const historyData = await SoiCauResult.find()
+            .sort({ predictionDate: -1 })
+            .limit(parseInt(limit))
+            .select('predictionDate predictions combinedPrediction history metadata');
+
+        // Format dữ liệu cho frontend
+        const formattedHistory = historyData.map(record => {
+            const predictionDate = new Date(record.predictionDate);
+            const dateString = predictionDate.toLocaleDateString('vi-VN');
+
+            // Lấy dự đoán bạch thủ lô từ predictions
+            const loPredictions = record.predictions.filter(p => p.method && p.number);
+            const predictedNumbers = loPredictions.map(p => p.number).join(', ');
+
+            // Lấy kết quả thực tế từ history
+            const historyEntry = record.history.find(h => h.date === dateString);
+            const actualNumbers = historyEntry ? historyEntry.actualNumbers : [];
+            const isHit = historyEntry ? historyEntry.isHit : false;
+
+            return {
+                date: dateString,
+                predictions: loPredictions,
+                predictedNumbers: predictedNumbers,
+                actualNumbers: actualNumbers,
+                isHit: isHit,
+                combinedPrediction: record.combinedPrediction
+            };
+        });
+
+        res.json({
+            success: true,
+            data: {
+                limit: parseInt(limit),
+                days: parseInt(days),
+                history: formattedHistory
+            }
+        });
+
+    } catch (error) {
+        console.error('❌ History Lo Error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy lịch sử dự đoán bạch thủ lô',
             error: error.message
         });
     }
