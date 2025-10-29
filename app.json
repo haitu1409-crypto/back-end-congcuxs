@@ -1,0 +1,43 @@
+{
+  "name": "dande-backend-api",
+  "description": "Backend API for Dàn Đề Wukong - Xổ Số Tools",
+  "repository": "https://github.com/haitu1409-crypto/back-end-congcuxs",
+  "logo": "https://taodandewukong.pro/logo.png",
+  "keywords": ["xổ số", "dàn đề", "lô đề", "api", "nodejs", "express", "mongodb"],
+  "image": "heroku/nodejs",
+  "stack": "heroku-18",
+  "buildpacks": [
+    {
+      "url": "heroku/nodejs"
+    }
+  ],
+  "env": {
+    "NODE_ENV": {
+      "description": "Environment",
+      "value": "production"
+    },
+    "PORT": {
+      "description": "Port to run the server on",
+      "value": "10000"
+    },
+    "PUPPETEER_SKIP_CHROMIUM_DOWNLOAD": {
+      "description": "Skip Puppeteer Chrome download",
+      "value": "true"
+    },
+    "CHROMIUM_PATH": {
+      "description": "Path to Chromium executable",
+      "value": "/usr/bin/chromium-browser"
+    }
+  },
+  "formation": {
+    "web": {
+      "quantity": 1,
+      "size": "basic"
+    }
+  },
+  "addons": [
+    {
+      "plan": "heroku-mongodb:mini"
+    }
+  ]
+}

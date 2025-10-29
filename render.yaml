@@ -5,7 +5,7 @@ services:
     buildCommand: npm install --only=production
     startCommand: npm start
     healthCheckPath: /health
-    rootDir: .
+    nodeVersion: 18
     envVars:
       - key: NODE_ENV
         value: production
