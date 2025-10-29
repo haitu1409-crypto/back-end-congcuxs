@@ -125,3 +125,7 @@ uploads/*
 # Build outputs
 build/
 dist/
+
+# Documentation (keep only README.md)
+*.md
+!README.md

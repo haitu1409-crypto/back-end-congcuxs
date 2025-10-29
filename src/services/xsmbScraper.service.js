@@ -169,22 +169,14 @@ class XSMBScraperService {
 
             // Khởi tạo browser
             browser = await puppeteer.launch({
-                headless: 'new', // Sử dụng headless mode mới để tránh cảnh báo
+                headless: true,
                 args: [
                     '--no-sandbox',
                     '--disable-setuid-sandbox',
                     '--disable-dev-shm-usage',
-                    '--disable-gpu',
-                    '--disable-web-security',
-                    '--disable-features=VizDisplayCompositor',
-                    '--single-process',
-                    '--no-zygote',
-                    '--disable-background-timer-throttling',
-                    '--disable-backgrounding-occluded-windows',
-                    '--disable-renderer-backgrounding'
+                    '--disable-gpu'
                 ],
-                executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || process.env.CHROMIUM_PATH || undefined,
-                timeout: 30000
+                executablePath: process.env.CHROMIUM_PATH || process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
             });
 
             page = await browser.newPage();

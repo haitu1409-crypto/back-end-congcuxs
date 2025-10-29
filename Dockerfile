@@ -1,43 +1,45 @@
-# Use Node.js 18 LTS
 FROM node:18-slim
 
-# Install system dependencies for Puppeteer
-RUN apt-get update \
-    && apt-get install -y wget gnupg \
-    && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
-    && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google.list' \
-    && apt-get update \
-    && apt-get install -y google-chrome-stable fonts-ipafont-gothic fonts-wqy-zenhei fonts-thai-tlwg fonts-kacst fonts-freefont-ttf libxss1 \
-      --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+# Cài đặt các thư viện phụ thuộc cho Puppeteer
+RUN apt-get update && apt-get install -y \
+  libglib2.0-0 \
+  libnss3 \
+  libnspr4 \
+  libatk1.0-0 \
+  libatk-bridge2.0-0 \
+  libcups2 \
+  libdrm2 \
+  libxkbcommon0 \
+  libxcomposite1 \
+  libxdamage1 \
+  libxfixes3 \
+  libxrandr2 \
+  libgbm1 \
+  libasound2 \
+  libpango-1.0-0 \
+  libcairo2 \
+  fonts-liberation \
+  ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
+# Thiết lập thư mục làm việc
 WORKDIR /app
 
-# Copy package files
+# Sao chép và cài đặt dependencies
 COPY package*.json ./
-COPY .npmrc ./
+RUN npm install --only=production && npm cache clean --force
 
-# Install dependencies
-RUN npm ci --only=production && npm cache clean --force
-
-# Copy source code
+# Sao chép mã nguồn
 COPY . .
 
-# Create uploads directory
-RUN mkdir -p uploads
-
-# Set environment variables for Puppeteer
+# Cấu hình môi trường
+ENV NODE_ENV=production
 ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-ENV PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable
-ENV PUPPETEER_ARGS="--no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --single-process --disable-gpu"
-
-# Expose port
 EXPOSE 10000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
   CMD curl -f http://localhost:10000/health || exit 1
 
-# Start the application
+# Chạy ứng dụng
 CMD ["npm", "start"]

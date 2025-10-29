@@ -13,12 +13,8 @@ services:
         value: 10000
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: true
-      - key: PUPPETEER_EXECUTABLE_PATH
+      - key: CHROMIUM_PATH
         value: /usr/bin/chromium-browser
-      - key: PUPPETEER_SKIP_DOWNLOAD
-        value: true
-      - key: PUPPETEER_ARGS
-        value: --no-sandbox --disable-setuid-sandbox --disable-dev-shm-usage --disable-accelerated-2d-canvas --no-first-run --no-zygote --single-process --disable-gpu
     scaling:
       minInstances: 1
       maxInstances: 3

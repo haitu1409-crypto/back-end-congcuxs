@@ -8,7 +8,6 @@
     "dev": "nodemon server.js",
     "test": "jest",
     "build": "npm install --only=production",
-    "postinstall": "node postinstall.js",
     "scraper": "node scraper.js",
     "cli": "node xsmb-scraper-cli.js"
   },
