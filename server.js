@@ -16,6 +16,8 @@ const articleRoutes = require('./src/routes/article.routes');
 const predictionRoutes = require('./src/routes/prediction.routes');
 const uploadRoutes = require('./src/routes/upload.routes');
 const xsmbScraperRoutes = require('./src/routes/xsmbScraper.routes');
+const resultMBRoutes = require('./src/routes/resultMB.routes');
+const statsUpdateRoutes = require('./src/routes/statsUpdate.routes');
 const soiCauRoutes = require('./src/routes/soiCau.routes');
 const positionSoiCauRoutes = require('./src/routes/positionSoiCau.routes');
 const bayesianRoutes = require('./src/routes/bayesian.routes');
@@ -123,7 +125,8 @@ app.use(cors({
         'Cache-Control',
         'X-Requested-With',
         'Access-Control-Request-Method',
-        'Access-Control-Request-Headers'
+        'Access-Control-Request-Headers',
+        'x-user-id'
     ],
     exposedHeaders: ['Content-Range', 'X-Content-Range'],
     preflightContinue: false,
@@ -175,7 +178,7 @@ app.use((req, res, next) => {
     }
 
     res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
-    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Access-Control-Request-Method, Access-Control-Request-Headers');
+    res.header('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Access-Control-Request-Method, Access-Control-Request-Headers, x-user-id');
     res.header('Access-Control-Allow-Credentials', 'true');
     res.header('Access-Control-Max-Age', '86400'); // Cache preflight for 24 hours
 
@@ -333,6 +336,8 @@ app.use('/api/dande', danDeRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/predictions', predictionRoutes);
 app.use('/api/xsmb', xsmbScraperRoutes);
+app.use('/api/kqxs', resultMBRoutes);
+app.use('/api/kqxs', statsUpdateRoutes);
 app.use('/api/soicau', soiCauRoutes);
 app.use('/api/position-soicau', positionSoiCauRoutes);
 app.use('/api/bayesian', bayesianRoutes);
