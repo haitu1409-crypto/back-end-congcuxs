@@ -170,18 +170,28 @@ router.get('/date/:date', async (req, res) => {
             });
         }
 
-        // Performance optimization: Check cache first
+        // Kiểm tra có force refresh không (từ query param)
+        const forceRefresh = req.query.refresh === 'true';
         const cacheKey = `soicau:date:${date}`;
-        const cachedData = getCachedData(cacheKey);
-        if (cachedData) {
-            console.log(`📦 Returning cached data for date: ${date}`);
-            return res.json(cachedData);
+        
+        // Nếu không force refresh, kiểm tra cache
+        if (!forceRefresh) {
+            const cachedData = getCachedData(cacheKey);
+            if (cachedData) {
+                console.log(`📦 Returning cached data for date: ${date}`);
+                return res.json(cachedData);
+            }
+        } else {
+            // Xóa cache nếu force refresh
+            cache.delete(cacheKey);
+            console.log(`🔄 Cache cleared for date: ${date} (force refresh)`);
         }
 
         // TỐI ƯU: Chỉ sử dụng DailyDataCollectionService (hệ thống mới)
         // Loại bỏ SoiCauService cũ để tránh xung đột logic
         try {
-            const dailyData = await dailyDataCollectionService.getDailyData(targetDate);
+            // Truyền forceRefresh để bypass cache nếu cần
+            const dailyData = await dailyDataCollectionService.getDailyData(targetDate, forceRefresh);
             console.log(`📋 Lấy dữ liệu từ DailyDataCollectionService cho ngày ${date}`);
 
             // Extract extendedFeatures từ historicalData để đặt ở root level (frontend expects it here)
@@ -212,15 +222,25 @@ router.get('/date/:date', async (req, res) => {
             return;
         } catch (dbError) {
             console.log(`⚠️ Không tìm thấy dữ liệu trong DailyDataCollectionService: ${dbError.message}`);
+            
+            // Cache response "no data" để tránh query nhiều lần
+            // Nhưng cache ngắn hơn (1 phút) để có thể refresh nhanh
+            const noDataResponse = {
+                success: true,
+                message: `Chưa có dữ liệu soi cầu cho ngày ${date}`,
+                data: null,
+                hasData: false
+            };
+            
+            // Cache ngắn hơn cho "no data" response (1 phút thay vì 5 phút)
+            cache.set(cacheKey, {
+                data: noDataResponse,
+                timestamp: Date.now()
+            });
+            
+            res.status(200).json(noDataResponse);
+            return;
         }
-
-        // Không tìm thấy dữ liệu - Trả về 200 với data null (không phải 404)
-        res.status(200).json({
-            success: true,
-            message: `Chưa có dữ liệu soi cầu cho ngày ${date}`,
-            data: null,
-            hasData: false
-        });
 
     } catch (error) {
         console.error('❌ Date Soi Cầu Error:', error.message);
@@ -267,6 +287,11 @@ router.post('/generate-soicau', async (req, res) => {
             type || 'de',
             parseInt(limit)
         );
+
+        // QUAN TRỌNG: Xóa cache cho ngày này để đảm bảo dữ liệu mới được load
+        const cacheKey = `soicau:date:${date}`;
+        cache.delete(cacheKey);
+        console.log(`🗑️ Cache cleared for date: ${date} after generating soi cầu`);
 
         res.json({
             success: true,
@@ -556,6 +581,12 @@ router.post('/generate', async (req, res) => {
             const existingData = await dailyDataCollectionService.getDailyData(targetDate);
             if (existingData && existingData.metadata.status === 'completed') {
                 console.log(`📋 Dữ liệu cho ngày ${date} đã tồn tại`);
+                
+                // Xóa cache cho route GET để đảm bảo dữ liệu mới được load
+                const cacheKey = `soicau:date:${date}`;
+                cache.delete(cacheKey);
+                console.log(`🗑️ Cache cleared for date: ${date} after checking existing data`);
+                
                 return res.json({
                     success: true,
                     message: 'Dữ liệu đã tồn tại cho ngày này',
@@ -572,6 +603,11 @@ router.post('/generate', async (req, res) => {
             targetDate,
             parseInt(days)
         );
+
+        // QUAN TRỌNG: Xóa cache cho route GET để đảm bảo dữ liệu mới được load
+        const cacheKey = `soicau:date:${date}`;
+        cache.delete(cacheKey);
+        console.log(`🗑️ Cache cleared for date: ${date} after generating data collection`);
 
         res.json({
             success: true,

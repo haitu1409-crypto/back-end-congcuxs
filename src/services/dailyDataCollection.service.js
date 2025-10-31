@@ -86,6 +86,10 @@ class DailyDataCollectionService {
                     const existingData = await DailySoiCauData.getByPredictionDate(targetDate);
                     if (existingData && existingData.metadata.status === 'completed') {
                         console.log(`✅ Dữ liệu đã được tạo bởi request khác, trả về dữ liệu hiện có`);
+                        // Xóa cache khi lấy lại dữ liệu
+                        const cacheKey = `daily:${targetDate.toISOString().split('T')[0]}`;
+                        this.cache.del(cacheKey);
+                        
                         return {
                             success: true,
                             message: 'Dữ liệu đã tồn tại (được tạo bởi request khác)',
@@ -97,6 +101,10 @@ class DailyDataCollectionService {
                         await new Promise(resolve => setTimeout(resolve, 1000));
                         const retryData = await DailySoiCauData.getByPredictionDate(targetDate);
                         if (retryData && retryData.metadata.status === 'completed') {
+                            // Xóa cache khi lấy lại dữ liệu
+                            const cacheKey = `daily:${targetDate.toISOString().split('T')[0]}`;
+                            this.cache.del(cacheKey);
+                            
                             return {
                                 success: true,
                                 message: 'Dữ liệu đã được hoàn thành bởi request khác',
@@ -108,6 +116,11 @@ class DailyDataCollectionService {
                 // Nếu không phải duplicate key error, throw lại
                 throw saveError;
             }
+
+            // QUAN TRỌNG: Xóa cache để đảm bảo dữ liệu mới được load
+            const cacheKey = `daily:${targetDate.toISOString().split('T')[0]}`;
+            this.cache.del(cacheKey);
+            console.log(`🗑️ Cache cleared for daily data: ${cacheKey} after saving`);
 
             return {
                 success: true,
@@ -310,23 +323,33 @@ class DailyDataCollectionService {
      * @param {Date} date - Ngày cần lấy dữ liệu
      * @returns {Object} Dữ liệu soi cầu
      */
-    async getDailyData(date) {
+    async getDailyData(date, forceRefresh = false) {
         const cacheKey = `daily:${date.toISOString().split('T')[0]}`;
 
-        // TỐI ƯU: Kiểm tra cache trước
-        const cached = this.cache.get(cacheKey);
-        if (cached) {
-            console.log(`📦 Cache hit for daily data: ${cacheKey}`);
-            return cached;
+        // Nếu force refresh, xóa cache trước
+        if (forceRefresh) {
+            this.cache.del(cacheKey);
+            console.log(`🗑️ Cache cleared for daily data: ${cacheKey} (force refresh)`);
+        } else {
+            // TỐI ƯU: Kiểm tra cache trước
+            const cached = this.cache.get(cacheKey);
+            if (cached) {
+                console.log(`📦 Cache hit for daily data: ${cacheKey}`);
+                return cached;
+            }
         }
 
         const dailyData = await DailySoiCauData.getByPredictionDate(date);
 
         if (!dailyData) {
+            // Xóa cache nếu không tìm thấy dữ liệu (có thể dữ liệu đã bị xóa)
+            this.cache.del(cacheKey);
             throw new Error(`Không tìm thấy dữ liệu soi cầu cho ngày ${date.toISOString().split('T')[0]}`);
         }
 
         if (dailyData.metadata.status !== 'completed') {
+            // Xóa cache nếu status không phải completed
+            this.cache.del(cacheKey);
             throw new Error(`Dữ liệu soi cầu cho ngày ${date.toISOString().split('T')[0]} chưa hoàn thành`);
         }
 
@@ -406,14 +429,62 @@ class DailyDataCollectionService {
                     // Tăng limit input cho Ultra Advanced service (lo cần nhiều hơn)
                     const ultraLimit = type === 'lo' ? 500 : 200;
                     const ultraResult = await this.ultraAdvancedSoiCauService.predict(targetDate, type, ultraLimit);
-                    // Chuyển đổi format để phù hợp với SoiCau model
-                    // Slice về limit cuối cùng (đã được tăng cho lo)
-                    predictions = ultraResult.predictions.slice(0, limit).map(pred => ({
-                        number: pred.number,
-                        probability: pred.calibratedScore || pred.finalScore || pred.score, // Sử dụng score cao nhất
-                        percentage: pred.percentage
-                    }));
-                    console.log(`✅ Generated ${predictions.length} ${type} predictions (from ${ultraResult.predictions.length} candidates)`);
+                    
+                    // Lọc và validate predictions
+                    const validPredictions = (ultraResult.predictions || [])
+                        .filter(pred => {
+                            // Chỉ lấy predictions hợp lệ
+                            if (!pred) return false;
+                            if (!pred.number || pred.number === '_metadata' || pred.number === 'metadata') return false;
+                            
+                            // Validate number format (00-99)
+                            const numStr = String(pred.number).padStart(2, '0');
+                            if (!/^\d{2}$/.test(numStr)) return false;
+                            
+                            // Get probability từ các field có thể có
+                            const prob = pred.calibratedScore || pred.finalScore || pred.score || 0;
+                            if (typeof prob !== 'number' || isNaN(prob) || prob <= 0) return false;
+                            
+                            return true;
+                        })
+                        .map(pred => {
+                            const numStr = String(pred.number).padStart(2, '0');
+                            const prob = pred.calibratedScore || pred.finalScore || pred.score || 0;
+                            const percentage = pred.percentage || (prob * 100).toFixed(2) + '%';
+                            
+                            return {
+                                number: numStr,
+                                probability: prob,
+                                percentage: typeof percentage === 'string' ? percentage : (prob * 100).toFixed(2) + '%'
+                            };
+                        })
+                        .sort((a, b) => b.probability - a.probability); // Sort theo probability giảm dần
+                    
+                    // Lọc bỏ các predictions có xác suất quá thấp
+                    // Với đề: chỉ lấy những số có probability >= 0.015 (1.5%) - cao hơn để có chất lượng tốt hơn
+                    // Với lô: có thể lấy thấp hơn một chút nhưng vẫn phải >= 0.01 (1%)
+                    const minProbability = type === 'de' ? 0.015 : 0.01;
+                    let filteredPredictions = validPredictions
+                        .filter(pred => pred.probability >= minProbability);
+                    
+                    // Nếu sau khi filter vẫn quá nhiều, chỉ lấy top predictions có probability cao nhất
+                    // Đảm bảo không quá nhiều predictions có xác suất quá thấp
+                    if (filteredPredictions.length > limit * 1.5) {
+                        // Chỉ lấy top predictions với probability cao hơn median
+                        const sortedByProb = [...filteredPredictions].sort((a, b) => b.probability - a.probability);
+                        const medianProb = sortedByProb[Math.floor(sortedByProb.length / 2)].probability;
+                        filteredPredictions = filteredPredictions.filter(pred => pred.probability >= medianProb);
+                    }
+                    
+                    // Lấy top predictions theo limit
+                    predictions = filteredPredictions.slice(0, limit);
+                    
+                    console.log(`✅ Generated ${predictions.length} ${type} predictions (from ${ultraResult.predictions.length} candidates, ${validPredictions.length} valid, ${filteredPredictions.length} above threshold)`);
+                    
+                    // Nếu không đủ predictions sau khi filter, log warning
+                    if (predictions.length < Math.min(limit, 10)) {
+                        console.warn(`⚠️ Only ${predictions.length} valid predictions found (min ${Math.min(limit, 10)} expected)`);
+                    }
                     break;
             }
 
@@ -459,6 +530,11 @@ class DailyDataCollectionService {
                 existingDailyData.metadata.lastUpdated = new Date();
                 await existingDailyData.save();
                 console.log(`✅ Updated ensemble predictions in DailySoiCauData for ${targetDate.toISOString().split('T')[0]}`);
+                
+                // QUAN TRỌNG: Xóa cache để đảm bảo dữ liệu mới được load
+                const cacheKey = `daily:${targetDate.toISOString().split('T')[0]}`;
+                this.cache.del(cacheKey);
+                console.log(`🗑️ Cache cleared for daily data: ${cacheKey} after updating predictions`);
             }
 
             // Tạo record mới trong SoiCau model
