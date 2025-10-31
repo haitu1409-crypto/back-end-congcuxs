@@ -197,11 +197,49 @@ router.get('/date/:date', async (req, res) => {
             // Extract extendedFeatures từ historicalData để đặt ở root level (frontend expects it here)
             const extendedFeatures = dailyData.historicalData?.extendedFeatures || null;
 
+            // QUAN TRỌNG: Filter và limit predictions khi load từ database
+            // Đảm bảo không trả về quá nhiều predictions và loại bỏ _metadata
+            const processedPredictions = { ...dailyData.predictions };
+            
+            // Xử lý ensemble predictions
+            if (processedPredictions.ensemble) {
+                const ensemble = processedPredictions.ensemble;
+                
+                // Xử lý cả cấu trúc cũ (array) và mới (object)
+                if (Array.isArray(ensemble)) {
+                    // Cấu trúc cũ: convert sang object và filter
+                    processedPredictions.ensemble = {
+                        de: ensemble.filter(pred => pred && pred.number && String(pred.number) !== '_metadata' && !String(pred.number).startsWith('_')).slice(0, 20),
+                        lo: []
+                    };
+                } else if (typeof ensemble === 'object') {
+                    // Cấu trúc mới: filter và limit cho de và lo
+                    processedPredictions.ensemble = {
+                        de: (ensemble.de || []).filter(pred => {
+                            if (!pred || !pred.number) return false;
+                            const numStr = String(pred.number).trim();
+                            return numStr !== '_metadata' && 
+                                   !numStr.startsWith('_') && 
+                                   !numStr.toLowerCase().includes('metadata') &&
+                                   /^\d{1,2}$/.test(numStr);
+                        }).slice(0, 20),
+                        lo: (ensemble.lo || []).filter(pred => {
+                            if (!pred || !pred.number) return false;
+                            const numStr = String(pred.number).trim();
+                            return numStr !== '_metadata' && 
+                                   !numStr.startsWith('_') && 
+                                   !numStr.toLowerCase().includes('metadata') &&
+                                   /^\d{1,2}$/.test(numStr);
+                        }).slice(0, 20) // Limit lo ở 20 predictions
+                    };
+                }
+            }
+            
             // Format chuẩn cho frontend
             const soiCauData = {
                 predictionDate: dailyData.predictionDate,
                 drawDate: dailyData.predictionDate,
-                predictions: dailyData.predictions,
+                predictions: processedPredictions,
                 probabilityStatistics: dailyData.probabilityStatistics,
                 historicalData: dailyData.historicalData,
                 metadata: dailyData.metadata,
@@ -259,8 +297,8 @@ router.get('/date/:date', async (req, res) => {
  */
 router.post('/generate-soicau', async (req, res) => {
     try {
-        // Tăng limit cho lo để có nhiều dữ liệu hơn (lo cần nhiều predictions hơn đề)
-        const defaultLimit = req.body.type === 'lo' ? 50 : 20;
+        // Giảm limit cho lo xuống 20 để không quá nhiều predictions
+        const defaultLimit = req.body.type === 'lo' ? 20 : 20;
         const { date, method, type, limit = defaultLimit } = req.body;
 
         if (!date) {
@@ -449,8 +487,36 @@ router.get('/history-detailed', async (req, res) => {
                     const isWaiting = predictionDate >= today;
 
                     // Lấy predictions từ ensemble theo type
+                    // QUAN TRỌNG: Xử lý cả cấu trúc cũ (array) và mới (object)
                     const ensemble = record.predictions?.ensemble || {};
-                    const predictions = (type === 'de' ? ensemble.de : ensemble.lo) || [];
+                    let predictions = [];
+                    
+                    if (Array.isArray(ensemble)) {
+                        // Cấu trúc cũ: ensemble là array
+                        // Nếu type='de', lấy từ array, nếu type='lo' thì để trống
+                        if (type === 'de') {
+                            predictions = ensemble || [];
+                        } else {
+                            predictions = [];
+                        }
+                    } else if (typeof ensemble === 'object') {
+                        // Cấu trúc mới: ensemble là object { de: [...], lo: [...] }
+                        predictions = (type === 'de' ? (ensemble.de || []) : (ensemble.lo || []));
+                    }
+
+                    // QUAN TRỌNG: Filter và limit predictions
+                    // Loại bỏ _metadata và các field không hợp lệ
+                    // Giới hạn ở 20 predictions (đề và lô đều giống nhau)
+                    const filteredPredictions = predictions
+                        .filter(pred => {
+                            if (!pred || !pred.number) return false;
+                            const numStr = String(pred.number).trim();
+                            return numStr !== '_metadata' && 
+                                   !numStr.startsWith('_') && 
+                                   !numStr.toLowerCase().includes('metadata') &&
+                                   /^\d{1,2}$/.test(numStr);
+                        })
+                        .slice(0, 20); // Limit ở 20 predictions
 
                     // Tạo nuôi khung (framing strategy) - cố định 3 ngày
                     const framingStrategy = { strategy: '3 ngày' };
@@ -460,18 +526,18 @@ router.get('/history-detailed', async (req, res) => {
                     let resultClass = 'waiting';
 
                     if (type === 'de') {
-                        const frameResult = await soiCauService.checkDeFrameResult(predictionDate, predictions);
+                        const frameResult = await soiCauService.checkDeFrameResult(predictionDate, filteredPredictions);
                         actualResult = frameResult.result;
                         resultClass = frameResult.class;
                     } else {
-                        const frameResult = await soiCauService.checkLoFrameResult(predictionDate, predictions);
+                        const frameResult = await soiCauService.checkLoFrameResult(predictionDate, filteredPredictions);
                         actualResult = frameResult.result;
                         resultClass = frameResult.class;
                     }
 
                     return {
                         date: predictionDate.toLocaleDateString('vi-VN'),
-                        predictions: predictions.map(p => p.number).join(', '),
+                        predictions: filteredPredictions.map(p => p.number).join(', '),
                         framingStrategy: framingStrategy,
                         actualResult: actualResult,
                         resultClass: resultClass,

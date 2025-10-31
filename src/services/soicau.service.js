@@ -347,14 +347,15 @@ class SoiCauService {
                 const isWaiting = predictionDate > today;
 
                 // Lấy predictions theo type
+                // QUAN TRỌNG: Xử lý cả cấu trúc cũ (array) và mới (object), filter và limit
                 let predictions = [];
                 if (type === 'de') {
                     // Đề: lấy từ ensemble (tổng hợp tất cả methods)
                     // Ensemble có cấu trúc { de: [...], lo: [...] } hoặc là array cũ
                     const ensemble = record.predictions?.ensemble;
                     if (Array.isArray(ensemble)) {
-                        // Cấu trúc cũ: ensemble là array
-                        predictions = ensemble;
+                        // Cấu trúc cũ: ensemble là array -> lấy cho de
+                        predictions = ensemble || [];
                     } else if (ensemble && ensemble.de) {
                         // Cấu trúc mới: ensemble là object { de: [...], lo: [...] }
                         predictions = ensemble.de || [];
@@ -365,10 +366,9 @@ class SoiCauService {
                     // Lô: lấy từ ensemble.lo hoặc fallback sang các method khác
                     const ensemble = record.predictions?.ensemble;
                     if (Array.isArray(ensemble)) {
-                        // Cấu trúc cũ
+                        // Cấu trúc cũ: ensemble là array -> không lấy cho lo (chỉ có de trong array cũ)
                         predictions = record.predictions?.cdm?.lo ||
-                            record.predictions?.efdm?.lo ||
-                            ensemble || [];
+                            record.predictions?.efdm?.lo || [];
                     } else if (ensemble && ensemble.lo) {
                         // Cấu trúc mới: ensemble là object { de: [...], lo: [...] }
                         predictions = ensemble.lo || [];
@@ -378,6 +378,20 @@ class SoiCauService {
                             record.predictions?.efdm?.lo || [];
                     }
                 }
+                
+                // QUAN TRỌNG: Filter và limit predictions
+                // Loại bỏ _metadata và các field không hợp lệ
+                // Giới hạn ở 20 predictions
+                predictions = predictions
+                    .filter(pred => {
+                        if (!pred || !pred.number) return false;
+                        const numStr = String(pred.number).trim();
+                        return numStr !== '_metadata' && 
+                               !numStr.startsWith('_') && 
+                               !numStr.toLowerCase().includes('metadata') &&
+                               /^\d{1,2}$/.test(numStr);
+                    })
+                    .slice(0, 20); // Limit ở 20 predictions
 
                 // Tạo nuôi khung (framing strategy) - cố định 3 ngày
                 const framingStrategy = this.generateFramingStrategy(predictions, type);

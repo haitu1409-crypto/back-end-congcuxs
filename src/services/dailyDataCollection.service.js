@@ -430,20 +430,32 @@ class DailyDataCollectionService {
                     const ultraLimit = type === 'lo' ? 500 : 200;
                     const ultraResult = await this.ultraAdvancedSoiCauService.predict(targetDate, type, ultraLimit);
                     
-                    // Lọc và validate predictions
+                    // Lọc và validate predictions - STRICT FILTERING
                     const validPredictions = (ultraResult.predictions || [])
                         .filter(pred => {
                             // Chỉ lấy predictions hợp lệ
-                            if (!pred) return false;
-                            if (!pred.number || pred.number === '_metadata' || pred.number === 'metadata') return false;
+                            if (!pred || typeof pred !== 'object') return false;
                             
-                            // Validate number format (00-99)
-                            const numStr = String(pred.number).padStart(2, '0');
-                            if (!/^\d{2}$/.test(numStr)) return false;
+                            // Loại bỏ các field metadata hoặc special fields
+                            if (!pred.number || 
+                                pred.number === '_metadata' || 
+                                pred.number === 'metadata' ||
+                                String(pred.number).toLowerCase().includes('metadata') ||
+                                String(pred.number).startsWith('_')) {
+                                return false;
+                            }
+                            
+                            // Validate number format (00-99) - chỉ chấp nhận số
+                            const numStr = String(pred.number).trim();
+                            if (!/^\d{1,2}$/.test(numStr)) return false;
+                            const paddedNum = numStr.padStart(2, '0');
+                            if (!/^\d{2}$/.test(paddedNum) || parseInt(paddedNum) < 0 || parseInt(paddedNum) > 99) {
+                                return false;
+                            }
                             
                             // Get probability từ các field có thể có
                             const prob = pred.calibratedScore || pred.finalScore || pred.score || 0;
-                            if (typeof prob !== 'number' || isNaN(prob) || prob <= 0) return false;
+                            if (typeof prob !== 'number' || isNaN(prob) || !isFinite(prob) || prob <= 0) return false;
                             
                             return true;
                         })
@@ -462,28 +474,61 @@ class DailyDataCollectionService {
                     
                     // Lọc bỏ các predictions có xác suất quá thấp
                     // Với đề: chỉ lấy những số có probability >= 0.015 (1.5%) - cao hơn để có chất lượng tốt hơn
-                    // Với lô: có thể lấy thấp hơn một chút nhưng vẫn phải >= 0.01 (1%)
-                    const minProbability = type === 'de' ? 0.015 : 0.01;
+                    // Với lô: tăng threshold lên 0.02 (2%) và giới hạn số lượng predictions
+                    const minProbability = type === 'de' ? 0.015 : 0.02;
                     let filteredPredictions = validPredictions
                         .filter(pred => pred.probability >= minProbability);
                     
-                    // Nếu sau khi filter vẫn quá nhiều, chỉ lấy top predictions có probability cao nhất
-                    // Đảm bảo không quá nhiều predictions có xác suất quá thấp
-                    if (filteredPredictions.length > limit * 1.5) {
-                        // Chỉ lấy top predictions với probability cao hơn median
-                        const sortedByProb = [...filteredPredictions].sort((a, b) => b.probability - a.probability);
-                        const medianProb = sortedByProb[Math.floor(sortedByProb.length / 2)].probability;
-                        filteredPredictions = filteredPredictions.filter(pred => pred.probability >= medianProb);
+                    // Với lô, giới hạn số lượng predictions để không quá nhiều
+                    // Chỉ lấy top predictions có xác suất cao nhất
+                    if (type === 'lo') {
+                        // Sắp xếp lại theo probability giảm dần
+                        filteredPredictions.sort((a, b) => b.probability - a.probability);
+                        // Với lô, chỉ lấy tối đa 20 predictions (giảm từ 30 xuống 20 để không quá nhiều)
+                        const maxLoPredictions = Math.min(limit, 20);
+                        filteredPredictions = filteredPredictions.slice(0, maxLoPredictions);
+                    } else {
+                        // Với đề, giữ nguyên logic
+                        // Nếu sau khi filter vẫn quá nhiều, chỉ lấy top predictions có probability cao nhất
+                        if (filteredPredictions.length > limit * 1.5) {
+                            // Chỉ lấy top predictions với probability cao hơn median
+                            const sortedByProb = [...filteredPredictions].sort((a, b) => b.probability - a.probability);
+                            const medianProb = sortedByProb[Math.floor(sortedByProb.length / 2)].probability;
+                            filteredPredictions = filteredPredictions.filter(pred => pred.probability >= medianProb);
+                        }
                     }
                     
-                    // Lấy top predictions theo limit
-                    predictions = filteredPredictions.slice(0, limit);
+                    // Lấy top predictions theo limit (đã được giới hạn cho lo ở trên)
+                    // Với lo, force limit = 20 (ngay cả khi request là 30)
+                    const finalLimit = type === 'lo' ? Math.min(limit, 20) : limit;
+                    predictions = filteredPredictions.slice(0, finalLimit);
                     
-                    console.log(`✅ Generated ${predictions.length} ${type} predictions (from ${ultraResult.predictions.length} candidates, ${validPredictions.length} valid, ${filteredPredictions.length} above threshold)`);
+                    // QUAN TRỌNG: Double-check để loại bỏ _metadata và các field không hợp lệ
+                    predictions = predictions.filter(pred => {
+                        if (!pred || !pred.number) return false;
+                        const numStr = String(pred.number).trim();
+                        if (numStr === '_metadata' || 
+                            numStr === 'metadata' || 
+                            numStr.toLowerCase().includes('metadata') ||
+                            numStr.startsWith('_') ||
+                            !/^\d{1,2}$/.test(numStr)) {
+                            return false;
+                        }
+                        // Kiểm tra probability hợp lệ
+                        if (typeof pred.probability !== 'number' || 
+                            isNaN(pred.probability) || 
+                            !isFinite(pred.probability) || 
+                            pred.probability <= 0) {
+                            return false;
+                        }
+                        return true;
+                    });
+                    
+                    console.log(`✅ Generated ${predictions.length} ${type} predictions (from ${ultraResult.predictions.length} candidates, ${validPredictions.length} valid, ${filteredPredictions.length} above threshold, final limit: ${finalLimit})`);
                     
                     // Nếu không đủ predictions sau khi filter, log warning
-                    if (predictions.length < Math.min(limit, 10)) {
-                        console.warn(`⚠️ Only ${predictions.length} valid predictions found (min ${Math.min(limit, 10)} expected)`);
+                    if (predictions.length < Math.min(finalLimit, 10)) {
+                        console.warn(`⚠️ Only ${predictions.length} valid predictions found (min ${Math.min(finalLimit, 10)} expected)`);
                     }
                     break;
             }
@@ -540,9 +585,28 @@ class DailyDataCollectionService {
             // Tạo record mới trong SoiCau model
             const SoiCau = require('../models/soicau.model');
 
+            // QUAN TRỌNG: Với lo, đảm bảo chỉ có tối đa 20 predictions
+            // Áp dụng limit cho tất cả methods khi type = 'lo'
+            if (type === 'lo') {
+                const maxLoLimit = 20;
+                if (predictions.length > maxLoLimit) {
+                    console.log(`⚠️ Trimming lo predictions from ${predictions.length} to ${maxLoLimit}`);
+                    predictions = predictions.slice(0, maxLoLimit);
+                    // Cập nhật lại ensembleObj với predictions đã trim
+                    ensembleObj.lo = predictions.map(pred => ({
+                        number: pred.number,
+                        probability: pred.probability,
+                        percentage: pred.percentage
+                    }));
+                    predictionsObj.ensemble = ensembleObj;
+                }
+            }
+
             // Tạo predictions cho method riêng lẻ nếu không phải ensemble
             if (method === 'cdm') {
-                predictionsObj.cdm = { [type]: predictions };
+                // Với lo, giới hạn ở 20
+                const methodLimit = type === 'lo' ? Math.min(limit, 20) : limit;
+                predictionsObj.cdm = { [type]: predictions.slice(0, methodLimit) };
             } else if (method === 'efdm') {
                 predictionsObj.efdm = { [type]: predictions };
             } else if (method === 'cf') {
@@ -550,18 +614,22 @@ class DailyDataCollectionService {
             } else if (method === 'ensemble') {
                 // Khi dùng ensemble, cũng tạo predictions cho các method riêng lẻ
                 try {
+                    // Với lo, giới hạn ở 20 cho tất cả methods
+                    const methodLimit = type === 'lo' ? Math.min(limit, 20) : limit;
+                    
                     // Tạo CDM predictions
                     if (type === 'de') {
                         const cdmDeProbs = await this.bayesianService.calculateDeProbabilities(targetDate, 30);
                         predictionsObj.cdm = {
-                            de: this.convertProbabilitiesToPredictions(cdmDeProbs, limit, 'de'),
+                            de: this.convertProbabilitiesToPredictions(cdmDeProbs, methodLimit, 'de'),
                             lo: []
                         };
                     } else {
                         const cdmLoProbs = await this.bayesianService.calculateLoProbabilities(targetDate, 30);
+                        const cdmLoPreds = this.convertProbabilitiesToPredictions(cdmLoProbs, methodLimit, 'lo');
                         predictionsObj.cdm = {
                             de: [],
-                            lo: this.convertProbabilitiesToPredictions(cdmLoProbs, limit, 'lo')
+                            lo: cdmLoPreds.slice(0, methodLimit) // Double-check limit
                         };
                     }
 
@@ -569,20 +637,22 @@ class DailyDataCollectionService {
                     if (type === 'de') {
                         const efdmDeProbs = await this.efdmService.calculateDeProbabilities(targetDate, 30);
                         predictionsObj.efdm = {
-                            de: this.convertProbabilitiesToPredictions(efdmDeProbs, limit, 'de'),
+                            de: this.convertProbabilitiesToPredictions(efdmDeProbs, methodLimit, 'de'),
                             lo: []
                         };
                     } else {
                         const efdmLoProbs = await this.efdmService.calculateLoProbabilities(targetDate, 30);
+                        const efdmLoPreds = this.convertProbabilitiesToPredictions(efdmLoProbs, methodLimit, 'lo');
                         predictionsObj.efdm = {
                             de: [],
-                            lo: this.convertProbabilitiesToPredictions(efdmLoProbs, limit, 'lo')
+                            lo: efdmLoPreds.slice(0, methodLimit) // Double-check limit
                         };
                     }
 
                     // Tạo Collaborative Filtering predictions
                     const cfProbs = await this.collaborativeFilteringService.predict(targetDate, 30, type, 5);
-                    predictionsObj.collaborativeFiltering = this.convertProbabilitiesToPredictions(cfProbs, limit, type);
+                    const cfPreds = this.convertProbabilitiesToPredictions(cfProbs, methodLimit, type);
+                    predictionsObj.collaborativeFiltering = type === 'lo' ? cfPreds.slice(0, methodLimit) : cfPreds;
 
                 } catch (error) {
                     console.warn('⚠️ Could not generate individual method predictions:', error.message);
@@ -773,8 +843,8 @@ class DailyDataCollectionService {
      * @returns {Array} Predictions array
      */
     convertProbabilitiesToPredictions(probabilities, limit, type = 'de') {
-        // Lo thường có nhiều số có xác suất tương đương, nên lấy nhiều hơn
-        const effectiveLimit = type === 'lo' ? Math.max(limit, 30) : limit;
+        // Với lo, giới hạn ở 20 predictions (không lấy nhiều hơn)
+        const effectiveLimit = type === 'lo' ? Math.min(limit, 20) : limit;
         
         const predictions = Object.entries(probabilities)
             .map(([number, probability]) => ({
@@ -785,7 +855,7 @@ class DailyDataCollectionService {
             .sort((a, b) => b.probability - a.probability)
             .slice(0, effectiveLimit);
             
-        console.log(`📊 Converted ${Object.keys(probabilities).length} probabilities to ${predictions.length} predictions (type: ${type})`);
+        console.log(`📊 Converted ${Object.keys(probabilities).length} probabilities to ${predictions.length} predictions (type: ${type}, limit: ${effectiveLimit})`);
         return predictions;
     }
 
