@@ -1,5 +1,8 @@
 const XSMB = require('../models/xsmb.model');
 const SoiCauResult = require('../models/soiCauResult.model');
+const soiCauSyncService = require('../services/soiCauSync.service');
+const soiCauUtils = require('../utils/soiCauUtils');
+const memoryCache = require('../utils/memoryCache');
 
 // Format date to DD/MM/YYYY
 const formatDate = (date) => {
@@ -41,7 +44,15 @@ const sanitizeResult = (result) => (result === 'N/A' ? '' : result);
 
 // Calculate frequencies from results
 const calculateFrequencies = async (results, station, days) => {
-    const allNumbers = results.reduce((acc, result) => {
+    // QUAN TRỌNG: Đảm bảo results đã được sắp xếp theo drawDate giảm dần để deterministic
+    const sortedResults = [...results].sort((a, b) => {
+        if (!a || !b) return 0;
+        const dateA = a.drawDate ? new Date(a.drawDate) : new Date(0);
+        const dateB = b.drawDate ? new Date(b.drawDate) : new Date(0);
+        return dateB - dateA; // Giảm dần (mới nhất trước)
+    });
+    
+    const allNumbers = sortedResults.reduce((acc, result) => {
         if (!result) return acc;
         return [
             ...acc,
@@ -62,7 +73,11 @@ const calculateFrequencies = async (results, station, days) => {
     });
     const frequencies = Object.entries(freqMap)
         .map(([number, count]) => ({ number, count }))
-        .sort((a, b) => b.count - a.count);
+        .sort((a, b) => {
+            // QUAN TRỌNG: Nếu count bằng nhau, sort theo number để deterministic
+            if (b.count !== a.count) return b.count - a.count;
+            return a.number.localeCompare(b.number);
+        });
 
     return frequencies;
 };
@@ -90,213 +105,465 @@ const calculateGanNumbers = async (results, station, days) => {
     return ganNumbers;
 };
 
-// Pascal method
-const applyPascal = async (results, diamondResult, pairResult, historicalPredictions) => {
+// Pascal method - Nâng cấp: Ghép đúng 10 chữ số từ ĐB (5) + G1 (5)
+const applyPascal = async (results, diamondResult, pairResult, historicalPredictions, targetDate) => {
     if (!results[0]) return '';
     const latestResult = results[0];
     const specialPrize = Array.isArray(latestResult.specialPrize) && latestResult.specialPrize[0] ? latestResult.specialPrize[0] : '';
     const firstPrize = Array.isArray(latestResult.firstPrize) && latestResult.firstPrize[0] ? latestResult.firstPrize[0] : '';
+    
     if (!specialPrize || !firstPrize || !/^\d+$/.test(specialPrize) || !/^\d+$/.test(firstPrize)) {
         return '';
     }
-    const secondLatestResult = results[1] || {};
-    const secondSpecialPrize = Array.isArray(secondLatestResult.specialPrize) && secondLatestResult.specialPrize[0] ? secondLatestResult.specialPrize[0] : specialPrize;
-    const input = ((parseInt(specialPrize.slice(-2)) + parseInt(secondSpecialPrize.slice(-2))) % 100).toString().padStart(2, '0') + firstPrize.slice(-2);
-    let result = input.split('').map(Number);
-    while (result.length > 2) {
-        result = result.slice(0, -1).map((num, i) => (num + result[i + 1]) % 10);
-    }
-    let pascalResult = result.join('').padStart(2, '0');
 
-    const frequencies = await calculateFrequencies(results, 'xsmb', results.length);
-    const topNumbers = frequencies.slice(0, 10).map(item => item.number); // Tăng từ 5 lên 10
+    // NÂNG CẤP: Ghép đúng 10 chữ số (5 chữ số ĐB + 5 chữ số G1)
+    const spDigits = specialPrize.toString().padStart(5, '0').slice(-5).split('').map(Number);
+    const fpDigits = firstPrize.toString().padStart(5, '0').slice(-5).split('').map(Number);
+    const combinedDigits = [...spDigits, ...fpDigits]; // 10 chữ số
+    
+    // Tính tam giác Pascal từ 10 chữ số
+    const pascalResult = soiCauUtils.calculatePascalTriangle(combinedDigits);
+    
+    if (!pascalResult) return '';
 
-    // TỐI ƯU: Thêm yếu tố ngẫu nhiên để tránh trùng lặp
-    const currentDate = new Date();
-    const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-    const randomSeed = (parseInt(specialPrize.slice(-1)) + parseInt(firstPrize.slice(-1)) + dayOfYear) % 100;
+    // Lấy top numbers từ tần suất để có thêm options
+    const frequencies = await calculateFrequencies(results, 'xsmb', Math.min(results.length, 14));
+    const topNumbers = frequencies.slice(0, 10).map(item => item.number);
 
-    // Avoid repetition with historical predictions - nhưng không quá strict
-    const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
-    if (historicalNumbers.includes(pascalResult) && topNumbers.length > 0) {
-        // Thêm logic chọn số dựa trên ngày để tạo sự đa dạng
-        const availableNumbers = topNumbers.filter(num => !historicalNumbers.includes(num));
-        if (availableNumbers.length > 0) {
-            const index = randomSeed % availableNumbers.length;
-            pascalResult = availableNumbers[index];
-        } else {
-            // Nếu tất cả số đều đã được dự đoán, chọn dựa trên ngày
-            const index = randomSeed % topNumbers.length;
-            pascalResult = topNumbers[index];
-        }
+    // Tạo candidates: Pascal result + top numbers + fallback
+    const candidates = [pascalResult, ...topNumbers.slice(0, 5), diamondResult, pairResult].filter(n => n && n !== '');
+    
+    // Tránh trùng lặp với các ngày gần đây
+    const filteredCandidates = await soiCauSyncService.avoidDuplicates(candidates, targetDate || new Date(), 7, false);
+    
+    // Chọn deterministic dựa trên seed từ dữ liệu thực tế
+    if (filteredCandidates.length > 0) {
+        return soiCauSyncService.selectFromCandidates(filteredCandidates, targetDate || new Date(), results);
+    } else if (candidates.length > 0) {
+        return soiCauSyncService.selectFromCandidates(candidates, targetDate || new Date(), results);
     }
 
-    if (topNumbers.includes(pascalResult)) {
-        return pascalResult;
-    }
-    return diamondResult || pairResult || topNumbers[0] || pascalResult;
+    return pascalResult || '';
 };
 
-// Diamond Shape method
-const applyDiamondShape = async (results, numDays, historicalPredictions) => {
+// Diamond Shape method - Nâng cấp: Kết hợp logic mô tả (G3/G4/G5) và logic hiện tại
+const applyDiamondShape = async (results, numDays, historicalPredictions, targetDate) => {
     if (!results.length) return '';
-    const recentResults = results.slice(0, 3);
-    const lastTwoDigits = recentResults
-        .reduce((acc, result) => {
-            if (!result) return acc;
-            return [
-                ...acc,
-                ...(Array.isArray(result.specialPrize) ? result.specialPrize : []),
-                ...(Array.isArray(result.firstPrize) ? result.firstPrize : []),
-                ...(Array.isArray(result.secondPrize) ? result.secondPrize : []),
-                ...(Array.isArray(result.threePrizes) ? result.threePrizes : []),
-                ...(Array.isArray(result.fourPrizes) ? result.fourPrizes : []),
-                ...(Array.isArray(result.fivePrizes) ? result.fivePrizes : []),
-                ...(Array.isArray(result.sixPrizes) ? result.sixPrizes : []),
-                ...(Array.isArray(result.sevenPrizes) ? result.sevenPrizes : []),
-            ];
-        }, [])
-        .map(prize => prize ? prize.slice(-2) : '').filter(prize => prize);
-
+    
+    const latestResult = results[0];
+    
+    // NÂNG CẤP: Ưu tiên lấy từ G3, G4, G5 như mô tả, nhưng cũng dùng dữ liệu từ nhiều ngày
+    const g3Numbers = Array.isArray(latestResult.threePrizes) 
+        ? latestResult.threePrizes.map(p => p ? p.toString().slice(-2) : '').filter(p => p).slice(0, 6)
+        : [];
+    const g4Numbers = Array.isArray(latestResult.fourPrizes)
+        ? latestResult.fourPrizes.map(p => p ? p.toString().slice(-2) : '').filter(p => p).slice(0, 4)
+        : [];
+    const g5Numbers = Array.isArray(latestResult.fivePrizes)
+        ? latestResult.fivePrizes.map(p => p ? p.toString().slice(-2) : '').filter(p => p).slice(0, 6)
+        : [];
+    
+    // Xếp thành bảng 3 hàng: G3 (hàng 1), G4 (hàng 2), G5 (hàng 3)
+    const table = [g3Numbers, g4Numbers, g5Numbers];
+    
     let diamondResult = '';
-    for (let i = 0; i < lastTwoDigits.length - 2; i++) {
-        for (let j = i + 1; j < lastTwoDigits.length - 1; j++) {
-            const [a, b, c] = [lastTwoDigits[i], lastTwoDigits[j], lastTwoDigits[j + 1]];
-            if (a === c && a !== b && b !== undefined) {
-                diamondResult = b.padStart(2, '0');
-                break;
+    
+    // Tìm pattern A-B-A trong bảng (theo logic mô tả)
+    // Pattern có thể là: G3[i] = G3[j] và G5[k] nằm giữa, hoặc G5[i] = G5[j] và G3[k] nằm giữa
+    for (let row = 0; row < table.length; row++) {
+        const currentRow = table[row];
+        for (let i = 0; i < currentRow.length - 2; i++) {
+            for (let j = i + 2; j < currentRow.length; j++) {
+                if (currentRow[i] === currentRow[j]) {
+                    // Tìm số B ở giữa hoặc ở hàng khác
+                    const a = currentRow[i];
+                    
+                    // Kiểm tra hàng giữa (G4) hoặc hàng đối diện
+                    const middleRow = row === 0 ? table[1] : (row === 2 ? table[1] : []);
+                    const oppositeRow = row === 0 ? table[2] : table[0];
+                    
+                    // Tìm số B (khác A) ở giữa hoặc ở hàng khác
+                    for (let k = 0; k < middleRow.length; k++) {
+                        if (middleRow[k] && middleRow[k] !== a) {
+                            diamondResult = middleRow[k];
+                            break;
+                        }
+                    }
+                    if (diamondResult) break;
+                    
+                    for (let k = 0; k < oppositeRow.length; k++) {
+                        if (oppositeRow[k] && oppositeRow[k] !== a) {
+                            diamondResult = oppositeRow[k];
+                            break;
+                        }
+                    }
+                    if (diamondResult) break;
+                }
             }
-            if (b === c && a !== b && a !== undefined) {
-                diamondResult = a.padStart(2, '0');
-                break;
-            }
+            if (diamondResult) break;
         }
         if (diamondResult) break;
     }
-
-    if (diamondResult) {
-        const ganNumbers = await calculateGanNumbers(results, 'xsmb', numDays);
-        if (ganNumbers.includes(diamondResult)) {
-            return '';
+    
+    // Fallback: Nếu không tìm thấy pattern trong bảng, dùng logic hiện tại (tìm trong dãy phẳng)
+    if (!diamondResult) {
+        const recentResults = results.slice(0, 3);
+        const allLastTwoDigits = recentResults
+            .reduce((acc, result) => {
+                if (!result) return acc;
+                return [
+                    ...acc,
+                    ...(Array.isArray(result.specialPrize) ? result.specialPrize : []),
+                    ...(Array.isArray(result.firstPrize) ? result.firstPrize : []),
+                    ...(Array.isArray(result.secondPrize) ? result.secondPrize : []),
+                    ...(Array.isArray(result.threePrizes) ? result.threePrizes : []),
+                    ...(Array.isArray(result.fourPrizes) ? result.fourPrizes : []),
+                    ...(Array.isArray(result.fivePrizes) ? result.fivePrizes : []),
+                ];
+            }, [])
+            .map(prize => prize ? prize.toString().slice(-2) : '').filter(prize => prize);
+        
+        // Tìm pattern A-B-A trong dãy phẳng
+        for (let i = 0; i < allLastTwoDigits.length - 2; i++) {
+            for (let j = i + 1; j < allLastTwoDigits.length - 1; j++) {
+                const [a, b, c] = [allLastTwoDigits[i], allLastTwoDigits[j], allLastTwoDigits[j + 1]];
+                if (a === c && a !== b && b) {
+                    diamondResult = b.padStart(2, '0');
+                    break;
+                }
+            }
+            if (diamondResult) break;
         }
-
-        // TỐI ƯU: Thêm yếu tố ngẫu nhiên dựa trên ngày
-        const currentDate = new Date();
-        const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-        const randomSeed = (dayOfYear + parseInt(diamondResult)) % 100;
-
-        // Avoid repetition with historical predictions - nhưng không quá strict
-        const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
-        if (historicalNumbers.includes(diamondResult)) {
-            const frequencies = await calculateFrequencies(results, 'xsmb', numDays);
-            const topNumbers = frequencies.slice(0, 10).map(item => item.number); // Tăng từ 5 lên 10
-            const availableNumbers = topNumbers.filter(num => !historicalNumbers.includes(num) && !ganNumbers.includes(num));
-            if (availableNumbers.length > 0) {
-                const index = randomSeed % availableNumbers.length;
-                diamondResult = availableNumbers[index];
+        
+        if (!diamondResult && allLastTwoDigits.length > 0) {
+            // Ưu tiên số từ G3/G4/G5 nếu có
+            const preferred = [...g3Numbers, ...g4Numbers, ...g5Numbers].filter(n => n);
+            if (preferred.length > 0) {
+                diamondResult = preferred[0];
             } else {
-                // Fallback với yếu tố ngẫu nhiên
-                const index = randomSeed % topNumbers.length;
-                diamondResult = topNumbers[index];
+                diamondResult = allLastTwoDigits[0];
             }
         }
     }
-    return diamondResult || lastTwoDigits[0] || '';
-};
 
-// Frequency-based Pairs method
-const applyFrequencyPairs = async (results, historicalPredictions) => {
-    if (!results.length) return '';
-    const recentResults = results.slice(0, 5);
-    const frequencies = await calculateFrequencies(recentResults, 'xsmb', recentResults.length);
-    if (frequencies.length === 0) return '';
-
-    // TỐI ƯU: Thêm yếu tố ngẫu nhiên dựa trên ngày
-    const currentDate = new Date();
-    const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-    const randomSeed = (dayOfYear + frequencies.length) % 100;
-
-    const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
-    const availableNumbers = frequencies.filter(item => !historicalNumbers.includes(item.number));
-
-    if (availableNumbers.length > 0) {
-        const index = randomSeed % availableNumbers.length;
-        return availableNumbers[index].number;
-    } else {
-        // Fallback với yếu tố ngẫu nhiên
-        const index = randomSeed % frequencies.length;
-        return frequencies[index].number;
-    }
-};
-
-// Gan and Frequency Combination method
-const applyGanFrequency = async (results, numDays, historicalPredictions) => {
-    if (!results.length) return '';
-    const ganNumbers = await calculateGanNumbers(results, 'xsmb', numDays);
-    const frequencies = await calculateFrequencies(results, 'xsmb', numDays);
-    const nearGanNumbers = ganNumbers.slice(0, Math.min(10, ganNumbers.length)); // Tăng từ 5 lên 10
-    const highFreqNumbers = frequencies.slice(0, 10).map(item => item.number); // Tăng từ 5 lên 10
-
-    // TỐI ƯU: Thêm yếu tố ngẫu nhiên dựa trên ngày
-    const currentDate = new Date();
-    const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-    const randomSeed = (dayOfYear + nearGanNumbers.length) % 100;
-
-    const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
-    const availableCandidates = nearGanNumbers.filter(num => highFreqNumbers.includes(num) && !historicalNumbers.includes(num));
-
-    if (availableCandidates.length > 0) {
-        const index = randomSeed % availableCandidates.length;
-        return availableCandidates[index];
-    } else {
-        const availableHighFreq = highFreqNumbers.filter(num => !historicalNumbers.includes(num));
-        if (availableHighFreq.length > 0) {
-            const index = randomSeed % availableHighFreq.length;
-            return availableHighFreq[index];
-        } else {
-            const index = randomSeed % highFreqNumbers.length;
-            return highFreqNumbers[index];
+    if (diamondResult) {
+        // Loại bỏ gan
+        const ganNumbers = await calculateGanNumbers(results, 'xsmb', numDays);
+        if (ganNumbers.includes(diamondResult)) {
+            const frequencies = await calculateFrequencies(results, 'xsmb', numDays);
+            const topNumbers = frequencies.slice(0, 10).map(item => item.number);
+            const candidates = [...topNumbers, ...g3Numbers, ...g4Numbers, ...g5Numbers]
+                .filter(n => n && !ganNumbers.includes(n));
+            if (candidates.length > 0) {
+                diamondResult = soiCauSyncService.selectFromCandidates(candidates, targetDate || new Date(), results);
+            }
+        }
+        
+        // Tránh trùng lặp
+        const candidates = [diamondResult].filter(n => n);
+        const filtered = await soiCauSyncService.avoidDuplicates(candidates, targetDate || new Date(), 7, false);
+        if (filtered.length > 0) {
+            return filtered[0];
         }
     }
+    
+    return diamondResult || '';
 };
 
-// Lô rơi method
-const applyLoRoi = async (results, historicalPredictions) => {
+// Frequency-based Pairs method - Nâng cấp: Tính cặp lô (AB-BA), điều kiện logic
+const applyFrequencyPairs = async (results, historicalPredictions, targetDate) => {
+    if (!results.length) return '';
+    
+    // NÂNG CẤP: Lấy 30 ngày để tính tần suất cặp lô
+    const daysToCheck = Math.min(30, results.length);
+    const recentResults = results.slice(0, daysToCheck);
+    
+    // Tính tần suất cặp lô (AB và BA là cùng 1 cặp)
+    const pairFrequency = soiCauUtils.calculatePairFrequency(recentResults, daysToCheck);
+    
+    if (pairFrequency.size === 0) return '';
+    
+    // Sắp xếp theo tần suất giảm dần
+    const sortedPairs = Array.from(pairFrequency.entries())
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 10); // Top 10 cặp
+    
+    // Lấy số đã về hôm qua (ngày gần nhất)
+    const latestResult = results[0];
+    const yesterdayNumbers = new Set();
+    if (latestResult) {
+        const allNumbers = [
+            ...(Array.isArray(latestResult.specialPrize) ? latestResult.specialPrize : []),
+            ...(Array.isArray(latestResult.firstPrize) ? latestResult.firstPrize : []),
+            ...(Array.isArray(latestResult.secondPrize) ? latestResult.secondPrize : []),
+            ...(Array.isArray(latestResult.threePrizes) ? latestResult.threePrizes : []),
+            ...(Array.isArray(latestResult.fourPrizes) ? latestResult.fourPrizes : []),
+            ...(Array.isArray(latestResult.fivePrizes) ? latestResult.fivePrizes : []),
+        ]
+            .map(prize => prize ? prize.toString().slice(-2) : '')
+            .filter(num => num && /^\d{2}$/.test(num));
+        
+        allNumbers.forEach(num => yesterdayNumbers.add(num));
+    }
+    
+    // NÂNG CẤP: Logic "Nếu 1 con trong cặp đã về hôm qua → chọn con kia"
+    const candidates = [];
+    
+    for (const [pair, frequency] of sortedPairs) {
+        // Ưu tiên cặp có tần suất >10 lần (như mô tả)
+        if (frequency >= 10) {
+            const [num1, num2] = pair.split('-');
+            
+            // Nếu num1 đã về hôm qua → chọn num2
+            if (yesterdayNumbers.has(num1)) {
+                candidates.push({ number: num2, frequency, priority: 2 }); // Priority cao hơn
+            }
+            // Nếu num2 đã về hôm qua → chọn num1
+            else if (yesterdayNumbers.has(num2)) {
+                candidates.push({ number: num1, frequency, priority: 2 });
+            }
+            // Nếu cả 2 đều chưa về → thêm cả 2 nhưng priority thấp hơn
+            else {
+                candidates.push({ number: num1, frequency, priority: 1 });
+                candidates.push({ number: num2, frequency, priority: 1 });
+            }
+        }
+    }
+    
+    // Nếu không có cặp nào thỏa điều kiện, lấy từ top cặp
+    if (candidates.length === 0 && sortedPairs.length > 0) {
+        const [num1, num2] = sortedPairs[0][0].split('-');
+        candidates.push({ number: num1, frequency: sortedPairs[0][1], priority: 0 });
+        candidates.push({ number: num2, frequency: sortedPairs[0][1], priority: 0 });
+    }
+    
+    if (candidates.length === 0) return '';
+    
+    // Sắp xếp: Priority cao > Tần suất cao
+    candidates.sort((a, b) => {
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        return b.frequency - a.frequency;
+    });
+    
+    // Chọn số tốt nhất, tránh trùng lặp
+    const candidateNumbers = candidates.map(c => c.number);
+    const filtered = await soiCauSyncService.avoidDuplicates(candidateNumbers, targetDate || new Date(), 7, false);
+    
+    if (filtered.length > 0) {
+        return soiCauSyncService.selectFromCandidates(filtered, targetDate || new Date(), results);
+    }
+    
+    return candidateNumbers[0] || '';
+};
+
+// Gan and Frequency Combination method - Nâng cấp: Gan >8 ngày, kết hợp ĐB, ưu tiên gan sắp nổ
+const applyGanFrequency = async (results, numDays, historicalPredictions, targetDate) => {
+    if (!results.length) return '';
+    
+    // QUAN TRỌNG: Đảm bảo results được sort đúng trước khi tính gan
+    // Tính gan phụ thuộc vào thứ tự (results[0] phải là ngày mới nhất)
+    const sortedResults = [...results].sort((a, b) => {
+        if (!a || !b || !a.drawDate || !b.drawDate) return 0;
+        const dateA = new Date(a.drawDate);
+        const dateB = new Date(b.drawDate);
+        return dateB - dateA; // Giảm dần (mới nhất trước)
+    });
+    
+    // QUAN TRỌNG: Normalize targetDate về 00:00:00 trước khi tính toán
+    const normalizedTargetDate = new Date(targetDate || new Date());
+    normalizedTargetDate.setHours(0, 0, 0, 0);
+    
+    // NÂNG CẤP: Tính số ngày gan cho mỗi lô
+    const ganMap = soiCauUtils.calculateGanDays(sortedResults);
+    
+    // Lấy chữ số cuối của ĐB hôm qua
+    const latestResult = sortedResults[0];
+    const specialPrize = Array.isArray(latestResult.specialPrize) && latestResult.specialPrize[0] 
+        ? latestResult.specialPrize[0].toString() : '';
+    const lastDigitDB = specialPrize ? specialPrize.slice(-1) : '';
+    
+    // NÂNG CẤP: Lọc gan >8 ngày và sắp xếp theo ưu tiên gan sắp nổ (9-12 ngày)
+    // QUAN TRỌNG: Chuyển Map sang Array và sắp xếp để đảm bảo thứ tự deterministic
+    const ganCandidates = [];
+    
+    // Chuyển Map sang Array và sắp xếp theo số để đảm bảo thứ tự ổn định
+    const ganArray = Array.from(ganMap.entries())
+        .filter(([number, ganDays]) => ganDays >= 8) // Chỉ lấy gan >8 ngày
+        .sort((a, b) => a[0].localeCompare(b[0])); // Sắp xếp theo số để deterministic
+    
+    ganArray.forEach(([number, ganDays]) => {
+        let priority = 0;
+        
+        // Ưu tiên gan sắp nổ (9-12 ngày) - priority cao nhất
+        if (ganDays >= 9 && ganDays <= 12) {
+            priority = 3;
+        }
+        // Gan >12 ngày - priority trung bình
+        else if (ganDays > 12) {
+            priority = 2;
+        }
+        // Gan 8 ngày - priority thấp
+        else {
+            priority = 1;
+        }
+        
+        // NÂNG CẤP: Kết hợp gan + chữ số cuối ĐB
+        // Nếu số gan có chứa chữ số cuối ĐB → tăng priority
+        if (lastDigitDB && (number.includes(lastDigitDB))) {
+            priority += 1;
+        }
+        
+        ganCandidates.push({ number, ganDays, priority });
+    });
+    
+    // Sắp xếp: Priority cao > Gan cao (sắp nổ hơn) > Số thứ tự (đảm bảo deterministic)
+    ganCandidates.sort((a, b) => {
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        // Nếu cùng priority, ưu tiên gan trong khoảng 9-12 (sắp nổ nhất)
+        const aNearNop = a.ganDays >= 9 && a.ganDays <= 12;
+        const bNearNop = b.ganDays >= 9 && b.ganDays <= 12;
+        if (aNearNop !== bNearNop) return bNearNop ? 1 : -1;
+        if (b.ganDays !== a.ganDays) return b.ganDays - a.ganDays;
+        // QUAN TRỌNG: Nếu vẫn bằng nhau, sắp xếp theo số (string) để đảm bảo thứ tự ổn định
+        return a.number.localeCompare(b.number);
+    });
+    
+    // Lấy top 10 gan (nhưng vẫn giữ logic mô tả là top 5)
+    const topGan = ganCandidates.slice(0, 10).map(item => item.number);
+    
+    if (topGan.length === 0) return '';
+    
+    // NÂNG CẤP: Kết hợp với tần suất cao để tăng độ chính xác
+    const frequencies = await calculateFrequencies(sortedResults, 'xsmb', numDays);
+    // QUAN TRỌNG: Chuyển sang Set để lookup nhanh, nhưng vẫn giữ thứ tự topGan
+    const highFreqNumbersSet = new Set(frequencies.slice(0, 10).map(item => item.number));
+    
+    // Ưu tiên gan có tần suất cao
+    // QUAN TRỌNG: Giữ nguyên thứ tự topGan (đã được sort deterministic)
+    // Duyệt theo thứ tự topGan để đảm bảo deterministic
+    const bestCandidates = [];
+    for (const num of topGan) {
+        if (highFreqNumbersSet.has(num)) {
+            bestCandidates.push(num);
+        }
+    }
+    
+    // Tạo candidates: Gan có tần suất cao > Gan sắp nổ > Gan thường
+    // QUAN TRỌNG: Luôn giữ nguyên thứ tự từ topGan để đảm bảo deterministic
+    const candidates = bestCandidates.length > 0 ? bestCandidates : topGan;
+    
+    // Tránh trùng lặp
+    const filtered = await soiCauSyncService.avoidDuplicates(candidates, normalizedTargetDate, 7, false);
+    
+    // QUAN TRỌNG: Luôn chọn phần tử đầu tiên (đã được sort kỹ) để đảm bảo deterministic
+    // KHÔNG dùng selectFromCandidates với seed vì seed có thể tạo ra sự không nhất quán
+    // (mặc dù seed đã được normalize, nhưng nếu có nhiều candidates cùng priority,
+    // thì việc dùng seed sẽ luân phiên giữa các candidates)
+    if (filtered.length > 0) {
+        return filtered[0]; // Luôn chọn phần tử đầu tiên
+    }
+    
+    // Fallback: Chọn phần tử đầu tiên từ candidates
+    return candidates[0] || '';
+};
+
+// Lô rơi method - Nâng cấp: 27 lô, ưu tiên ĐB/G1/2 nháy/rơi liên tục
+const applyLoRoi = async (results, historicalPredictions, targetDate) => {
     if (results.length < 2 || !results[0] || !results[1]) return '';
 
-    const getLastTwoDigits = (result) => {
+    const latestResult = results[0];
+    const previousResult = results[1];
+    
+    // NÂNG CẤP: Lấy tất cả 27 lô từ ngày hôm qua (đầy đủ tất cả giải)
+    const getAllNumbers = (result) => {
         if (!result) return [];
         return [
             ...(Array.isArray(result.specialPrize) ? result.specialPrize : []),
             ...(Array.isArray(result.firstPrize) ? result.firstPrize : []),
             ...(Array.isArray(result.secondPrize) ? result.secondPrize : []),
-        ].map(prize => prize ? prize.slice(-2) : '').filter(prize => prize);
+            ...(Array.isArray(result.threePrizes) ? result.threePrizes : []),
+            ...(Array.isArray(result.fourPrizes) ? result.fourPrizes : []),
+            ...(Array.isArray(result.fivePrizes) ? result.fivePrizes : []),
+            ...(Array.isArray(result.sixPrizes) ? result.sixPrizes : []),
+            ...(Array.isArray(result.sevenPrizes) ? result.sevenPrizes : []),
+        ]
+            .map(prize => prize ? prize.toString().slice(-2) : '')
+            .filter(prize => prize && /^\d{2}$/.test(prize));
     };
 
-    const lastTwoDigitsRecent = getLastTwoDigits(results[0]);
-    const lastTwoDigitsPrevious = getLastTwoDigits(results[1]);
+    const yesterdayNumbers = getAllNumbers(latestResult);
+    const dayBeforeNumbers = getAllNumbers(previousResult);
+    
+    // Tìm lô rơi (xuất hiện ở cả 2 ngày)
+    const roiNumbers = yesterdayNumbers.filter(num => dayBeforeNumbers.includes(num));
+    
+    if (roiNumbers.length === 0) return '';
 
-    // TỐI ƯU: Thêm yếu tố ngẫu nhiên dựa trên ngày
-    const currentDate = new Date();
-    const dayOfYear = Math.floor((currentDate - new Date(currentDate.getFullYear(), 0, 0)) / (1000 * 60 * 60 * 24));
-    const randomSeed = (dayOfYear + lastTwoDigitsRecent.length) % 100;
-
-    const historicalNumbers = historicalPredictions.flatMap(h => h.predictions.filter(p => p.number).map(p => p.number));
-    const availableLoRoi = lastTwoDigitsRecent.filter(num => lastTwoDigitsPrevious.includes(num) && !historicalNumbers.includes(num));
-
-    if (availableLoRoi.length > 0) {
-        const index = randomSeed % availableLoRoi.length;
-        return availableLoRoi[index];
-    } else {
-        const availableRecent = lastTwoDigitsRecent.filter(num => !historicalNumbers.includes(num));
-        if (availableRecent.length > 0) {
-            const index = randomSeed % availableRecent.length;
-            return availableRecent[index];
-        } else {
-            const index = randomSeed % lastTwoDigitsRecent.length;
-            return lastTwoDigitsRecent[index];
+    // NÂNG CẤP: Tính số nháy cho mỗi lô hôm qua
+    const nhayMap = soiCauUtils.countNhay(latestResult);
+    
+    // NÂNG CẤP: Kiểm tra lô rơi liên tục 2-3 ngày
+    const consecutiveDaysMap = new Map();
+    for (const num of roiNumbers) {
+        const consecutiveDays = soiCauUtils.checkConsecutiveDays(results.slice(0, 3), num, 2);
+        if (consecutiveDays >= 2) {
+            consecutiveDaysMap.set(num, consecutiveDays);
         }
     }
+    
+    // NÂNG CẤP: Tạo candidates với ưu tiên theo mô tả
+    const candidates = [];
+    
+    // Ưu tiên 1: Lô từ ĐB/G1
+    const dbNumber = Array.isArray(latestResult.specialPrize) && latestResult.specialPrize[0] 
+        ? latestResult.specialPrize[0].toString().slice(-2) : '';
+    const g1Numbers = Array.isArray(latestResult.firstPrize) 
+        ? latestResult.firstPrize.map(p => p ? p.toString().slice(-2) : '').filter(p => p)
+        : [];
+    
+    for (const num of roiNumbers) {
+        let priority = 0;
+        
+        // Ưu tiên cao nhất: Lô từ ĐB
+        if (num === dbNumber) {
+            priority = 5;
+        }
+        // Ưu tiên cao: Lô từ G1
+        else if (g1Numbers.includes(num)) {
+            priority = 4;
+        }
+        // Ưu tiên: Lô 2 nháy
+        else if (nhayMap.get(num) >= 2) {
+            priority = 3;
+        }
+        // Ưu tiên: Lô rơi liên tục 2-3 ngày
+        else if (consecutiveDaysMap.has(num)) {
+            priority = 2;
+        }
+        // Lô rơi thường
+        else {
+            priority = 1;
+        }
+        
+        candidates.push({ number: num, priority, nhay: nhayMap.get(num) || 1, consecutiveDays: consecutiveDaysMap.get(num) || 0 });
+    }
+    
+    // Sắp xếp: Priority cao > Nháy cao > Rơi liên tục nhiều ngày
+    candidates.sort((a, b) => {
+        if (b.priority !== a.priority) return b.priority - a.priority;
+        if (b.nhay !== a.nhay) return b.nhay - a.nhay;
+        return b.consecutiveDays - a.consecutiveDays;
+    });
+    
+    // Lấy số tốt nhất
+    const bestNumber = candidates[0]?.number;
+    
+    if (!bestNumber) return '';
+    
+    // Tránh trùng lặp
+    const filtered = await soiCauSyncService.avoidDuplicates([bestNumber], targetDate || new Date(), 7, false);
+    
+    return filtered.length > 0 ? filtered[0] : bestNumber;
 };
 
 // Calculate historical hit rates
@@ -426,17 +693,26 @@ const getHistoricalPredictions = async (targetDate, numDays) => {
                     Array.isArray(result.sixPrizes) ||
                     Array.isArray(result.sevenPrizes))
             );
+            
+            // QUAN TRỌNG: Sort lại validPastResults để đảm bảo deterministic
+            validPastResults.sort((a, b) => {
+                if (!a || !b || !a.drawDate || !b.drawDate) return 0;
+                const dateA = new Date(a.drawDate);
+                const dateB = new Date(b.drawDate);
+                return dateB - dateA; // Giảm dần (mới nhất trước)
+            });
 
             if (validPastResults.length === 0) continue;
 
             // Sử dụng simplified historical predictions để tránh recursive call
             const pastHistory = await getHistoricalPredictionsSimplified(new Date(pastDate.getTime() - 24 * 60 * 60 * 1000), numDays);
 
-            const diamondResult = await applyDiamondShape(validPastResults, numDays, pastHistory);
-            const pairResult = await applyFrequencyPairs(validPastResults, pastHistory);
-            const pascalResult = await applyPascal(validPastResults, diamondResult, pairResult, pastHistory);
-            const ganFreqResult = await applyGanFrequency(validPastResults, numDays, pastHistory);
-            const loRoiResult = await applyLoRoi(validPastResults, pastHistory);
+            const pastTargetDate = new Date(pastDate.getTime() - 24 * 60 * 60 * 1000);
+            const diamondResult = await applyDiamondShape(validPastResults, numDays, pastHistory, pastTargetDate);
+            const pairResult = await applyFrequencyPairs(validPastResults, pastHistory, pastTargetDate);
+            const pascalResult = await applyPascal(validPastResults, diamondResult, pairResult, pastHistory, pastTargetDate);
+            const ganFreqResult = await applyGanFrequency(validPastResults, numDays, pastHistory, pastTargetDate);
+            const loRoiResult = await applyLoRoi(validPastResults, pastHistory, pastTargetDate);
 
             const predictions = [
                 { method: 'Pascal', number: pascalResult, frame: pascalResult ? '3 ngày' : '' },
@@ -617,20 +893,26 @@ const getBachThuMB = async (req, res) => {
             targetDate = new Date();
         }
 
-        const currentTime = new Date();
-        const today = formatDate(targetDate);
-        const lastUpdateKey = `lastUpdate:${today}`;
-
-        // Dự đoán cho đúng ngày được yêu cầu
-        const predictionDate = formatDate(targetDate);
+        // Normalize targetDate về 00:00:00 để đảm bảo cache key nhất quán
+        const normalizedTargetDate = new Date(targetDate);
+        normalizedTargetDate.setHours(0, 0, 0, 0);
+        
+        const predictionDate = formatDate(normalizedTargetDate);
         console.log(`📅 Predicting for requested date: ${predictionDate}`);
 
-        const formattedTargetDate = formatDate(targetDate);
+        const formattedTargetDate = formatDate(normalizedTargetDate);
 
-        // Tạm thời bỏ qua cache để test function mới
-        console.log(`🔄 Force tính toán real-time để test function mới`);
-
-        console.log(`⚠️ Không có dữ liệu trong database, tính toán real-time cho ngày ${predictionDate}`);
+        // PERFORMANCE: Check cache trước khi tính toán
+        const cacheKey = `soicau:${predictionDate}:${numDays}`;
+        const cachedResult = memoryCache.get(cacheKey);
+        
+        if (cachedResult) {
+            console.log(`✅ Cache HIT for ${cacheKey}`);
+            clearTimeout(timeout);
+            return res.status(200).json(cachedResult);
+        }
+        
+        console.log(`⚠️ Cache MISS for ${cacheKey}, tính toán real-time...`);
 
         const endOfDay = new Date(targetDate);
         endOfDay.setHours(23, 59, 59, 999);
@@ -678,6 +960,16 @@ const getBachThuMB = async (req, res) => {
                 Array.isArray(result.sixPrizes) ||
                 Array.isArray(result.sevenPrizes))
         );
+        
+        // QUAN TRỌNG: Sort lại validResults theo drawDate giảm dần để đảm bảo deterministic
+        // (đặc biệt quan trọng khi có extendedResults được push vào)
+        validResults.sort((a, b) => {
+            if (!a || !b || !a.drawDate || !b.drawDate) return 0;
+            const dateA = new Date(a.drawDate);
+            const dateB = new Date(b.drawDate);
+            return dateB - dateA; // Giảm dần (mới nhất trước)
+        });
+        
         console.log(`✅ Valid results: ${validResults.length}`);
 
         if (validResults.length === 0) {
@@ -695,19 +987,19 @@ const getBachThuMB = async (req, res) => {
         console.log(`✅ Historical predictions: ${history.length}`);
 
         console.log(`🔄 Applying prediction methods...`);
-        const diamondResult = await applyDiamondShape(validResults, numDays, history);
+        const diamondResult = await applyDiamondShape(validResults, numDays, history, targetDate);
         console.log(`✅ Diamond result: ${diamondResult}`);
 
-        const pairResult = await applyFrequencyPairs(validResults, history);
+        const pairResult = await applyFrequencyPairs(validResults, history, targetDate);
         console.log(`✅ Pair result: ${pairResult}`);
 
-        const pascalResult = await applyPascal(validResults, diamondResult, pairResult, history);
+        const pascalResult = await applyPascal(validResults, diamondResult, pairResult, history, targetDate);
         console.log(`✅ Pascal result: ${pascalResult}`);
 
-        const ganFreqResult = await applyGanFrequency(validResults, numDays, history);
+        const ganFreqResult = await applyGanFrequency(validResults, numDays, history, targetDate);
         console.log(`✅ Gan freq result: ${ganFreqResult}`);
 
-        const loRoiResult = await applyLoRoi(validResults, history);
+        const loRoiResult = await applyLoRoi(validResults, history, targetDate);
         console.log(`✅ Lo roi result: ${loRoiResult}`);
 
         const predictions = [
@@ -795,40 +1087,46 @@ const getBachThuMB = async (req, res) => {
             },
         };
 
-        // Lưu vào database (tránh duplicate)
-        try {
-            // Kiểm tra xem đã có dữ liệu cho ngày này chưa
-            const existingResult = await SoiCauResult.findOne({
-                predictionDate: parseDateForDB(predictionDate),
-                dataDays: numDays
-            });
+        // PERFORMANCE: Lưu vào cache trước khi save database
+        // Cache 1 giờ (3600s) - đủ lâu để tránh tính toán lại nhưng không quá cũ
+        memoryCache.set(cacheKey, response, 3600);
+        console.log(`✅ Đã cache kết quả cho ${cacheKey} (TTL: 3600s)`);
 
-            if (existingResult) {
-                console.log(`⚠️ Đã có dữ liệu cho ngày ${predictionDate}, cập nhật thay vì tạo mới`);
-                // Cập nhật dữ liệu hiện có
-                existingResult.predictions = response.predictions;
-                existingResult.combinedPrediction = response.combinedPrediction;
-                existingResult.additionalSuggestions = response.additionalSuggestions;
-                existingResult.history = response.history;
-                existingResult.metadata = response.metadata;
-                await existingResult.save();
-                console.log(`✅ Đã cập nhật dữ liệu cho ngày ${predictionDate}`);
-            } else {
-                // Tạo mới
-                const soiCauResult = new SoiCauResult({
-                    predictionDate: parseDateForDB(predictionDate),
-                    dataDays: numDays,
-                    predictions: response.predictions,
-                    combinedPrediction: response.combinedPrediction,
-                    additionalSuggestions: response.additionalSuggestions,
-                    history: response.history,
-                    metadata: response.metadata
-                });
-                await soiCauResult.save();
-                console.log(`✅ Đã tạo mới dữ liệu cho ngày ${predictionDate}`);
+        // PERFORMANCE: Sử dụng findOneAndUpdate với upsert để tối ưu database operations
+        // Thay vì findOne + save (2 operations) → chỉ cần 1 operation (atomic)
+        // Giảm race condition và tăng performance
+        try {
+            const dbDate = parseDateForDB(predictionDate);
+            const result = await SoiCauResult.findOneAndUpdate(
+                {
+                    predictionDate: dbDate,
+                    dataDays: numDays
+                },
+                {
+                    $set: {
+                        predictions: response.predictions,
+                        combinedPrediction: response.combinedPrediction,
+                        additionalSuggestions: response.additionalSuggestions,
+                        history: response.history,
+                        metadata: response.metadata,
+                        updatedAt: new Date()
+                    }
+                },
+                {
+                    upsert: true, // Tạo mới nếu chưa có
+                    new: true, // Trả về document sau khi update
+                    runValidators: false, // Tắt validators để tăng performance (đã validate ở business logic)
+                    setDefaultsOnInsert: true // Set defaults khi insert mới
+                }
+            );
+            
+            if (result) {
+                console.log(`✅ Đã ${result._id ? 'cập nhật' : 'tạo mới'} dữ liệu trong database cho ngày ${predictionDate} (findOneAndUpdate)`);
             }
         } catch (dbErr) {
             console.error('❌ Lỗi khi lưu vào database:', dbErr.message);
+            // Không throw error để không ảnh hưởng đến response
+            // Cache đã được lưu, nên user vẫn nhận được kết quả
         }
 
         clearTimeout(timeout);

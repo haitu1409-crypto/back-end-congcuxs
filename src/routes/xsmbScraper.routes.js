@@ -21,7 +21,7 @@ router.post('/scrape/date/:date', xsmbScraperController.scrapeSpecificDate);
  * @route   GET /api/xsmb/results
  * @desc    Lấy danh sách kết quả XSMB với phân trang và filter
  * @access  Public
- * @query   page, limit, date, isComplete, sortBy, sortOrder
+ * @query   page, limit, date, sortBy, sortOrder
  */
 router.get('/results', xsmbScraperController.getResults);
 

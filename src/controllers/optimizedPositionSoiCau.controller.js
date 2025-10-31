@@ -324,8 +324,7 @@ const getOptimizedPositionPatternStats = async (req, res) => {
             const results = await databaseOptimizer.optimizeQuery(
                 XSMB.find({
                     drawDate: { $gte: startOfPeriod, $lte: endOfDay },
-                    station: 'xsmb',
-                    isComplete: true
+                    station: 'xsmb'
                 }),
                 'drawDate specialPrize firstPrize secondPrize threePrizes fourPrizes fivePrizes sixPrizes sevenPrizes'
             ).sort({ drawDate: -1 });

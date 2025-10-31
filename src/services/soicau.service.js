@@ -350,13 +350,33 @@ class SoiCauService {
                 let predictions = [];
                 if (type === 'de') {
                     // Đề: lấy từ ensemble (tổng hợp tất cả methods)
-                    predictions = record.predictions?.ensemble || [];
+                    // Ensemble có cấu trúc { de: [...], lo: [...] } hoặc là array cũ
+                    const ensemble = record.predictions?.ensemble;
+                    if (Array.isArray(ensemble)) {
+                        // Cấu trúc cũ: ensemble là array
+                        predictions = ensemble;
+                    } else if (ensemble && ensemble.de) {
+                        // Cấu trúc mới: ensemble là object { de: [...], lo: [...] }
+                        predictions = ensemble.de || [];
+                    } else {
+                        predictions = [];
+                    }
                 } else {
-                    // Lô: lấy từ cdm.lo, fallback sang efdm.lo, cuối cùng mới ensemble
-                    // (bỏ qua collaborativeFiltering vì thường có probability = 0)
-                    predictions = record.predictions?.cdm?.lo ||
-                        record.predictions?.efdm?.lo ||
-                        record.predictions?.ensemble || [];
+                    // Lô: lấy từ ensemble.lo hoặc fallback sang các method khác
+                    const ensemble = record.predictions?.ensemble;
+                    if (Array.isArray(ensemble)) {
+                        // Cấu trúc cũ
+                        predictions = record.predictions?.cdm?.lo ||
+                            record.predictions?.efdm?.lo ||
+                            ensemble || [];
+                    } else if (ensemble && ensemble.lo) {
+                        // Cấu trúc mới: ensemble là object { de: [...], lo: [...] }
+                        predictions = ensemble.lo || [];
+                    } else {
+                        // Fallback sang các method khác
+                        predictions = record.predictions?.cdm?.lo ||
+                            record.predictions?.efdm?.lo || [];
+                    }
                 }
 
                 // Tạo nuôi khung (framing strategy) - cố định 3 ngày

@@ -8,7 +8,9 @@ const soicauSchema = new mongoose.Schema({
     // Thông tin cơ bản
     predictionDate: {
         type: Date,
-        required: true
+        required: true,
+        unique: true, // Đảm bảo mỗi ngày chỉ có 1 bộ dữ liệu soi cầu
+        index: true
     },
     drawDate: {
         type: Date,
@@ -50,11 +52,8 @@ const soicauSchema = new mongoose.Schema({
             probability: { type: Number, required: true },
             percentage: { type: String, required: true }
         }],
-        ensemble: [{
-            number: { type: String, required: true },
-            probability: { type: Number, required: true },
-            percentage: { type: String, required: true }
-        }]
+        // Ensemble có thể là array (cấu trúc cũ) hoặc object { de: [...], lo: [...] } (cấu trúc mới)
+        ensemble: mongoose.Schema.Types.Mixed
     },
 
     // Kết quả thực tế (sau khi có kết quả xổ số)
@@ -122,6 +121,7 @@ const soicauSchema = new mongoose.Schema({
 }, {
     timestamps: true,
     indexes: [
+        { predictionDate: 1, unique: true }, // Unique index để đảm bảo không trùng lặp
         { predictionDate: 1, drawDate: 1 },
         { predictionDate: -1 },
         { drawDate: -1 },
@@ -249,8 +249,17 @@ soicauSchema.methods.calculateAccuracy = function (actualDe, actualLo) {
         this.accuracyStats.cf.hitNumbers = cfHitNumbers;
         this.accuracyStats.cf.missNumbers = cfPredicted.filter(num => !actualLo.includes(num));
 
-        // Ensemble
-        const ensemblePredicted = this.predictions.ensemble.map(p => p.number);
+        // Ensemble - hỗ trợ cả array (cũ) và object { de, lo } (mới)
+        let ensemblePredicted = [];
+        if (Array.isArray(this.predictions.ensemble)) {
+            // Cấu trúc cũ: array
+            ensemblePredicted = this.predictions.ensemble.map(p => p.number);
+        } else if (this.predictions.ensemble && typeof this.predictions.ensemble === 'object') {
+            // Cấu trúc mới: object { de: [...], lo: [...] }
+            const ensembleDe = (this.predictions.ensemble.de || []).map(p => p.number);
+            const ensembleLo = (this.predictions.ensemble.lo || []).map(p => p.number);
+            ensemblePredicted = [...ensembleDe, ...ensembleLo];
+        }
         const ensembleHitNumbers = ensemblePredicted.filter(num => actualLo.includes(num));
         this.accuracyStats.ensemble.hitCount = ensembleHitNumbers.length;
         this.accuracyStats.ensemble.totalPredicted = ensemblePredicted.length;

@@ -74,10 +74,40 @@ class DailyDataCollectionService {
             dailyData.metadata.status = 'completed';
             dailyData.metadata.updatedAt = new Date();
 
-            // Lưu vào database
-            await dailyData.save();
-
-            console.log(`✅ Đã lưu dữ liệu soi cầu cho ngày ${targetDate.toISOString().split('T')[0]}`);
+            // Lưu vào database - handle duplicate key error (race condition)
+            try {
+                await dailyData.save();
+                console.log(`✅ Đã lưu dữ liệu soi cầu cho ngày ${targetDate.toISOString().split('T')[0]}`);
+            } catch (saveError) {
+                // Nếu lỗi duplicate key (code 11000 hoặc 11001), có nghĩa là record đã được tạo bởi request khác
+                if (saveError.code === 11000 || saveError.code === 11001) {
+                    console.log(`⚠️ Duplicate key error - record đã tồn tại, lấy lại dữ liệu...`);
+                    // Lấy lại dữ liệu đã được tạo bởi request khác
+                    const existingData = await DailySoiCauData.getByPredictionDate(targetDate);
+                    if (existingData && existingData.metadata.status === 'completed') {
+                        console.log(`✅ Dữ liệu đã được tạo bởi request khác, trả về dữ liệu hiện có`);
+                        return {
+                            success: true,
+                            message: 'Dữ liệu đã tồn tại (được tạo bởi request khác)',
+                            data: existingData
+                        };
+                    } else if (existingData && existingData.metadata.status === 'pending') {
+                        // Nếu đang pending, đợi một chút và thử lại
+                        console.log(`⏳ Dữ liệu đang được xử lý bởi request khác, đợi...`);
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        const retryData = await DailySoiCauData.getByPredictionDate(targetDate);
+                        if (retryData && retryData.metadata.status === 'completed') {
+                            return {
+                                success: true,
+                                message: 'Dữ liệu đã được hoàn thành bởi request khác',
+                                data: retryData
+                            };
+                        }
+                    }
+                }
+                // Nếu không phải duplicate key error, throw lại
+                throw saveError;
+            }
 
             return {
                 success: true,
@@ -88,11 +118,16 @@ class DailyDataCollectionService {
         } catch (error) {
             console.error(`❌ Lỗi thu thập dữ liệu cho ngày ${targetDate.toISOString().split('T')[0]}:`, error.message);
 
-            // Cập nhật trạng thái lỗi nếu có record
-            if (dailyData) {
-                dailyData.metadata.status = 'failed';
-                dailyData.metadata.error = error.message;
-                await dailyData.save();
+            // Cập nhật trạng thái lỗi nếu có record (và không phải duplicate key)
+            if (dailyData && error.code !== 11000 && error.code !== 11001) {
+                try {
+                    dailyData.metadata.status = 'failed';
+                    dailyData.metadata.error = error.message;
+                    await dailyData.save();
+                } catch (updateError) {
+                    // Ignore update error nếu record đã bị xóa hoặc không tồn tại
+                    console.warn('⚠️ Could not update error status:', updateError.message);
+                }
             }
 
             throw error;
@@ -344,55 +379,90 @@ class DailyDataCollectionService {
                 case 'cdm':
                     if (type === 'de') {
                         const deProbs = await this.bayesianService.calculateDeProbabilities(targetDate, 30);
-                        predictions = this.convertProbabilitiesToPredictions(deProbs, limit);
+                        predictions = this.convertProbabilitiesToPredictions(deProbs, limit, type);
                     } else {
                         const loProbs = await this.bayesianService.calculateLoProbabilities(targetDate, 30);
-                        predictions = this.convertProbabilitiesToPredictions(loProbs, limit);
+                        predictions = this.convertProbabilitiesToPredictions(loProbs, limit, type);
                     }
                     break;
                 case 'efdm':
                     if (type === 'de') {
                         const deProbs = await this.efdmService.calculateDeProbabilities(targetDate, 30);
-                        predictions = this.convertProbabilitiesToPredictions(deProbs, limit);
+                        predictions = this.convertProbabilitiesToPredictions(deProbs, limit, type);
                     } else {
                         const loProbs = await this.efdmService.calculateLoProbabilities(targetDate, 30);
-                        predictions = this.convertProbabilitiesToPredictions(loProbs, limit);
+                        predictions = this.convertProbabilitiesToPredictions(loProbs, limit, type);
                     }
                     break;
                 case 'cf':
                     // Sử dụng Collaborative Filtering thực sự
                     const cfProbs = await this.collaborativeFilteringService.predict(targetDate, 30, type, 5);
-                    predictions = this.convertProbabilitiesToPredictions(cfProbs, limit);
+                    predictions = this.convertProbabilitiesToPredictions(cfProbs, limit, type);
                     break;
                 case 'ensemble':
                 default:
                     // Sử dụng Ultra Advanced Soi Cầu cho ensemble
                     console.log('🧠 Using Ultra Advanced AI Soi Cầu for ensemble predictions');
-                    const ultraResult = await this.ultraAdvancedSoiCauService.predict(targetDate, type, 200);
+                    // Tăng limit input cho Ultra Advanced service (lo cần nhiều hơn)
+                    const ultraLimit = type === 'lo' ? 500 : 200;
+                    const ultraResult = await this.ultraAdvancedSoiCauService.predict(targetDate, type, ultraLimit);
                     // Chuyển đổi format để phù hợp với SoiCau model
+                    // Slice về limit cuối cùng (đã được tăng cho lo)
                     predictions = ultraResult.predictions.slice(0, limit).map(pred => ({
                         number: pred.number,
                         probability: pred.calibratedScore || pred.finalScore || pred.score, // Sử dụng score cao nhất
                         percentage: pred.percentage
                     }));
+                    console.log(`✅ Generated ${predictions.length} ${type} predictions (from ${ultraResult.predictions.length} candidates)`);
                     break;
             }
-
-            // Cập nhật predictions trong DailySoiCauData
-            await DailySoiCauData.updatePredictions(targetDate, method, type, predictions);
-
-            // Tạo record mới trong SoiCau model
-            const SoiCau = require('../models/soicau.model');
 
             // Tạo predictions object theo cấu trúc SoiCau model
             const predictionsObj = {};
 
-            // Luôn tạo ensemble predictions
-            predictionsObj.ensemble = predictions.map(pred => ({
-                number: pred.number,
-                probability: pred.probability,
-                percentage: pred.percentage
-            }));
+            // Luôn tạo ensemble predictions - phải là object với de và lo để khớp với frontend
+            let ensembleObj = {};
+            if (type === 'de') {
+                ensembleObj = {
+                    de: predictions.map(pred => ({
+                        number: pred.number,
+                        probability: pred.probability,
+                        percentage: pred.percentage
+                    })),
+                    lo: []
+                };
+            } else {
+                ensembleObj = {
+                    de: [],
+                    lo: predictions.map(pred => ({
+                        number: pred.number,
+                        probability: pred.probability,
+                        percentage: pred.percentage
+                    }))
+                };
+            }
+            predictionsObj.ensemble = ensembleObj;
+
+            // Cập nhật predictions trong DailySoiCauData
+            // Quan trọng: Cập nhật cả method riêng lẻ VÀ ensemble để đảm bảo đồng bộ
+            await DailySoiCauData.updatePredictions(targetDate, method, type, predictions);
+            
+            // Cập nhật ensemble trong DailySoiCauData (merge để không ghi đè lo khi update de và ngược lại)
+            const existingDailyData = await DailySoiCauData.getByPredictionDate(targetDate);
+            if (existingDailyData) {
+                const existingEnsemble = existingDailyData.predictions?.ensemble || { de: [], lo: [] };
+                const mergedEnsemble = {
+                    de: type === 'de' ? ensembleObj.de : (existingEnsemble.de || []),
+                    lo: type === 'lo' ? ensembleObj.lo : (existingEnsemble.lo || [])
+                };
+                existingDailyData.predictions.ensemble = mergedEnsemble;
+                existingDailyData.metadata.lastUpdated = new Date();
+                await existingDailyData.save();
+                console.log(`✅ Updated ensemble predictions in DailySoiCauData for ${targetDate.toISOString().split('T')[0]}`);
+            }
+
+            // Tạo record mới trong SoiCau model
+            const SoiCau = require('../models/soicau.model');
 
             // Tạo predictions cho method riêng lẻ nếu không phải ensemble
             if (method === 'cdm') {
@@ -408,14 +478,14 @@ class DailyDataCollectionService {
                     if (type === 'de') {
                         const cdmDeProbs = await this.bayesianService.calculateDeProbabilities(targetDate, 30);
                         predictionsObj.cdm = {
-                            de: this.convertProbabilitiesToPredictions(cdmDeProbs, limit),
+                            de: this.convertProbabilitiesToPredictions(cdmDeProbs, limit, 'de'),
                             lo: []
                         };
                     } else {
                         const cdmLoProbs = await this.bayesianService.calculateLoProbabilities(targetDate, 30);
                         predictionsObj.cdm = {
                             de: [],
-                            lo: this.convertProbabilitiesToPredictions(cdmLoProbs, limit)
+                            lo: this.convertProbabilitiesToPredictions(cdmLoProbs, limit, 'lo')
                         };
                     }
 
@@ -423,20 +493,20 @@ class DailyDataCollectionService {
                     if (type === 'de') {
                         const efdmDeProbs = await this.efdmService.calculateDeProbabilities(targetDate, 30);
                         predictionsObj.efdm = {
-                            de: this.convertProbabilitiesToPredictions(efdmDeProbs, limit),
+                            de: this.convertProbabilitiesToPredictions(efdmDeProbs, limit, 'de'),
                             lo: []
                         };
                     } else {
                         const efdmLoProbs = await this.efdmService.calculateLoProbabilities(targetDate, 30);
                         predictionsObj.efdm = {
                             de: [],
-                            lo: this.convertProbabilitiesToPredictions(efdmLoProbs, limit)
+                            lo: this.convertProbabilitiesToPredictions(efdmLoProbs, limit, 'lo')
                         };
                     }
 
                     // Tạo Collaborative Filtering predictions
                     const cfProbs = await this.collaborativeFilteringService.predict(targetDate, 30, type, 5);
-                    predictionsObj.collaborativeFiltering = this.convertProbabilitiesToPredictions(cfProbs, limit);
+                    predictionsObj.collaborativeFiltering = this.convertProbabilitiesToPredictions(cfProbs, limit, type);
 
                 } catch (error) {
                     console.warn('⚠️ Could not generate individual method predictions:', error.message);
@@ -460,47 +530,125 @@ class DailyDataCollectionService {
                 }
             };
 
-            // Kiểm tra xem đã có dữ liệu cho ngày này chưa
-            const existingSoiCau = await SoiCau.findOne({
-                predictionDate: targetDate,
-                'predictions.ensemble': { $exists: true }
-            });
+            // Sử dụng findOneAndUpdate với upsert để đảm bảo atomic và tránh race condition
+            // Upsert sẽ tạo mới nếu không có, cập nhật nếu đã có (tránh duplicate)
+            try {
+                // Lấy dữ liệu hiện có để merge ensemble (nếu đang update)
+                const existingSoiCau = await SoiCau.findOne({ predictionDate: targetDate }).lean();
+                
+                // Merge ensemble predictions: không ghi đè lo khi update de và ngược lại
+                let mergedEnsemble = predictionsObj.ensemble;
+                if (existingSoiCau && existingSoiCau.predictions && existingSoiCau.predictions.ensemble) {
+                    const existingEnsemble = existingSoiCau.predictions.ensemble;
+                    if (Array.isArray(existingEnsemble)) {
+                        // Cấu trúc cũ: array -> convert sang object
+                        mergedEnsemble = {
+                            de: type === 'de' ? predictionsObj.ensemble.de : [],
+                            lo: type === 'lo' ? predictionsObj.ensemble.lo : []
+                        };
+                    } else if (typeof existingEnsemble === 'object') {
+                        // Cấu trúc mới: object -> merge
+                        mergedEnsemble = {
+                            de: type === 'de' ? predictionsObj.ensemble.de : (existingEnsemble.de || []),
+                            lo: type === 'lo' ? predictionsObj.ensemble.lo : (existingEnsemble.lo || [])
+                        };
+                    }
+                }
 
-            if (existingSoiCau) {
-                console.log(`⚠️ Đã có dữ liệu soi cầu cho ngày ${targetDate.toISOString().split('T')[0]}`);
-                console.log(`📋 Sử dụng dữ liệu hiện có với ID: ${existingSoiCau._id}`);
-                console.log(`🔄 Method: ${method}, Type: ${type}`);
+                // Tạo update object - tránh conflict giữa $setOnInsert và $set
+                const updateObj = {
+                    $setOnInsert: { // Chỉ set khi insert (tạo mới)
+                        predictionDate: targetDate,
+                        drawDate: targetDate,
+                        metadata: {
+                            dataDays: 30,
+                            topK: limit,
+                            algorithm: method,
+                            processingTime: Date.now(),
+                            cacheHit: false
+                        },
+                        createdAt: new Date()
+                    },
+                    $set: { // Luôn update những field này
+                        updatedAt: new Date()
+                    }
+                };
 
-                // Trả về dữ liệu hiện có thay vì tạo mới
-                const existingPredictions = existingSoiCau.predictions.ensemble || [];
+                // Nếu là insert mới, set toàn bộ predictions
+                if (!existingSoiCau) {
+                    updateObj.$setOnInsert.predictions = {
+                        ...predictionsObj,
+                        ensemble: mergedEnsemble
+                    };
+                } else {
+                    // Nếu đã tồn tại, chỉ update các sub-path (tránh conflict)
+                    updateObj.$set['predictions.ensemble'] = mergedEnsemble;
+                    // Update method riêng lẻ nếu cần
+                    if (predictionsObj.cdm) {
+                        updateObj.$set['predictions.cdm'] = predictionsObj.cdm;
+                    }
+                    if (predictionsObj.efdm) {
+                        updateObj.$set['predictions.efdm'] = predictionsObj.efdm;
+                    }
+                    if (predictionsObj.collaborativeFiltering) {
+                        updateObj.$set['predictions.collaborativeFiltering'] = predictionsObj.collaborativeFiltering;
+                    }
+                }
+
+                const result = await SoiCau.findOneAndUpdate(
+                    { predictionDate: targetDate }, // Tìm theo predictionDate (unique)
+                    updateObj,
+                    {
+                        upsert: true, // Tạo mới nếu không tìm thấy
+                        new: true, // Trả về document sau khi update
+                        runValidators: true // Chạy validation
+                    }
+                );
+
+                // Lấy predictions theo type
+                const ensemble = result.predictions.ensemble || { de: [], lo: [] };
+                const resultPredictions = Array.isArray(ensemble) ? ensemble : (ensemble[type] || []);
+
+                if (result.wasNew) {
+                    console.log(`✅ Created new SoiCau record for ${targetDate.toISOString().split('T')[0]} with ID: ${result._id}`);
+                } else {
+                    console.log(`✅ Updated existing SoiCau record for ${targetDate.toISOString().split('T')[0]} with ID: ${result._id}`);
+                }
+
                 return {
                     method,
                     type,
                     date: targetDate.toISOString().split('T')[0],
                     limit,
-                    predictions: existingPredictions,
-                    soiCauId: existingSoiCau._id,
-                    cached: true,
-                    message: `Dữ liệu đã tồn tại cho ngày ${targetDate.toISOString().split('T')[0]}`
+                    predictions: resultPredictions,
+                    soiCauId: result._id,
+                    cached: !result.wasNew,
+                    message: result.wasNew 
+                        ? `Tạo mới dữ liệu soi cầu cho ngày ${targetDate.toISOString().split('T')[0]}`
+                        : `Cập nhật dữ liệu soi cầu cho ngày ${targetDate.toISOString().split('T')[0]}`
                 };
+            } catch (saveError) {
+                // Nếu lỗi duplicate key (race condition), thử lấy lại record đã tồn tại
+                if (saveError.code === 11000 || saveError.code === 11001) {
+                    console.log(`⚠️ Duplicate key error (race condition), fetching existing record...`);
+                    const existingSoiCau = await SoiCau.findOne({ predictionDate: targetDate });
+                    if (existingSoiCau) {
+                        const ensemble = existingSoiCau.predictions.ensemble || { de: [], lo: [] };
+                        const existingPredictions = Array.isArray(ensemble) ? ensemble : (ensemble[type] || []);
+                        return {
+                            method,
+                            type,
+                            date: targetDate.toISOString().split('T')[0],
+                            limit,
+                            predictions: existingPredictions,
+                            soiCauId: existingSoiCau._id,
+                            cached: true,
+                            message: `Dữ liệu đã tồn tại cho ngày ${targetDate.toISOString().split('T')[0]} (resolved race condition)`
+                        };
+                    }
+                }
+                throw saveError;
             }
-
-            // Lưu vào SoiCau model (chỉ khi chưa có)
-            const newSoiCau = new SoiCau(soiCauData);
-            await newSoiCau.save();
-
-            console.log(`✅ Generated ${predictions.length} predictions for ${method}-${type}`);
-            console.log(`✅ Saved to SoiCau model with ID: ${newSoiCau._id}`);
-
-            return {
-                method,
-                type,
-                date: targetDate.toISOString().split('T')[0],
-                limit,
-                predictions,
-                soiCauId: newSoiCau._id,
-                cached: false
-            };
 
         } catch (error) {
             console.error('❌ Error generating predictions:', error.message);
@@ -548,15 +696,21 @@ class DailyDataCollectionService {
      * @param {number} limit - Số lượng tối đa
      * @returns {Array} Predictions array
      */
-    convertProbabilitiesToPredictions(probabilities, limit) {
-        return Object.entries(probabilities)
+    convertProbabilitiesToPredictions(probabilities, limit, type = 'de') {
+        // Lo thường có nhiều số có xác suất tương đương, nên lấy nhiều hơn
+        const effectiveLimit = type === 'lo' ? Math.max(limit, 30) : limit;
+        
+        const predictions = Object.entries(probabilities)
             .map(([number, probability]) => ({
                 number,
                 probability,
                 percentage: (probability * 100).toFixed(2) + '%'
             }))
             .sort((a, b) => b.probability - a.probability)
-            .slice(0, limit);
+            .slice(0, effectiveLimit);
+            
+        console.log(`📊 Converted ${Object.keys(probabilities).length} probabilities to ${predictions.length} predictions (type: ${type})`);
+        return predictions;
     }
 
     /**

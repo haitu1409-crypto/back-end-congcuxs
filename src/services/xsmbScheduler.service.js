@@ -76,18 +76,16 @@ class XSMBSchedulerService {
             const today = new Date();
             const existingResult = await XSMB.findByDate(today);
 
-            if (existingResult && existingResult.isComplete) {
-                console.log('✅ Đã có dữ liệu đầy đủ cho ngày hôm nay, bỏ qua...');
+            if (existingResult) {
+                console.log('✅ Đã có dữ liệu cho ngày hôm nay, bỏ qua...');
                 return;
             }
 
             // Cào dữ liệu cho ngày hiện tại
             const result = await xsmbScraperService.scrapeToday();
 
-            if (result.success && result.isComplete) {
-                console.log('✅ Cào dữ liệu XSMB thành công và đầy đủ');
-            } else if (result.success && !result.isComplete) {
-                console.log('⚠️ Cào dữ liệu XSMB thành công nhưng chưa đầy đủ');
+            if (result.success) {
+                console.log('✅ Cào dữ liệu XSMB thành công');
             } else {
                 console.log('❌ Cào dữ liệu XSMB thất bại');
             }

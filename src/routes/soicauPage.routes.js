@@ -184,6 +184,9 @@ router.get('/date/:date', async (req, res) => {
             const dailyData = await dailyDataCollectionService.getDailyData(targetDate);
             console.log(`📋 Lấy dữ liệu từ DailyDataCollectionService cho ngày ${date}`);
 
+            // Extract extendedFeatures từ historicalData để đặt ở root level (frontend expects it here)
+            const extendedFeatures = dailyData.historicalData?.extendedFeatures || null;
+
             // Format chuẩn cho frontend
             const soiCauData = {
                 predictionDate: dailyData.predictionDate,
@@ -192,6 +195,10 @@ router.get('/date/:date', async (req, res) => {
                 probabilityStatistics: dailyData.probabilityStatistics,
                 historicalData: dailyData.historicalData,
                 metadata: dailyData.metadata,
+                // Thêm extendedFeatures ở root level để frontend dễ truy cập
+                extendedFeatures: extendedFeatures,
+                // Thêm lstmStats (tạm thời để trống, sẽ được thêm sau nếu cần)
+                lstmStats: {},
                 // Thêm thông tin để frontend biết có dữ liệu
                 hasData: true
             };
@@ -232,7 +239,9 @@ router.get('/date/:date', async (req, res) => {
  */
 router.post('/generate-soicau', async (req, res) => {
     try {
-        const { date, method, type, limit = 20 } = req.body;
+        // Tăng limit cho lo để có nhiều dữ liệu hơn (lo cần nhiều predictions hơn đề)
+        const defaultLimit = req.body.type === 'lo' ? 50 : 20;
+        const { date, method, type, limit = defaultLimit } = req.body;
 
         if (!date) {
             return res.status(400).json({
@@ -388,6 +397,80 @@ router.get('/history-detailed', async (req, res) => {
 
         console.log(`📊 Getting detailed history for ${type} - ${limit} records, ${days} days`);
 
+        // TỐI ƯU: Ưu tiên lấy từ DailySoiCauData (model mới) để đồng bộ với box predictions
+        // Fallback sang SoiCau model (model cũ) nếu không tìm thấy
+        try {
+            const startDate = new Date();
+            startDate.setDate(startDate.getDate() - parseInt(days));
+
+            // Lấy từ DailySoiCauData (model mới)
+            const DailySoiCauData = require('../models/dailySoiCauData.model');
+            const dailyDataHistory = await DailySoiCauData.find({
+                predictionDate: { $gte: startDate },
+                'metadata.status': 'completed'
+            })
+                .sort({ predictionDate: -1 })
+                .limit(parseInt(limit))
+                .lean();
+
+            if (dailyDataHistory && dailyDataHistory.length > 0) {
+                console.log(`✅ Getting history from DailySoiCauData (${dailyDataHistory.length} records)`);
+
+                // Format dữ liệu từ DailySoiCauData
+                const formattedHistory = await Promise.all(dailyDataHistory.map(async (record) => {
+                    const predictionDate = new Date(record.predictionDate);
+                    const today = new Date();
+                    today.setHours(0, 0, 0, 0);
+                    const isWaiting = predictionDate >= today;
+
+                    // Lấy predictions từ ensemble theo type
+                    const ensemble = record.predictions?.ensemble || {};
+                    const predictions = (type === 'de' ? ensemble.de : ensemble.lo) || [];
+
+                    // Tạo nuôi khung (framing strategy) - cố định 3 ngày
+                    const framingStrategy = { strategy: '3 ngày' };
+
+                    // Xác định kết quả thực tế theo khung 3 ngày
+                    let actualResult = 'Đang chờ...';
+                    let resultClass = 'waiting';
+
+                    if (type === 'de') {
+                        const frameResult = await soiCauService.checkDeFrameResult(predictionDate, predictions);
+                        actualResult = frameResult.result;
+                        resultClass = frameResult.class;
+                    } else {
+                        const frameResult = await soiCauService.checkLoFrameResult(predictionDate, predictions);
+                        actualResult = frameResult.result;
+                        resultClass = frameResult.class;
+                    }
+
+                    return {
+                        date: predictionDate.toLocaleDateString('vi-VN'),
+                        predictions: predictions.map(p => p.number).join(', '),
+                        framingStrategy: framingStrategy,
+                        actualResult: actualResult,
+                        resultClass: resultClass,
+                        predictionDate: predictionDate,
+                        isWaiting: isWaiting
+                    };
+                }));
+
+                return res.json({
+                    success: true,
+                    data: {
+                        limit: parseInt(limit),
+                        days: parseInt(days),
+                        type,
+                        history: formattedHistory,
+                        source: 'DailySoiCauData'
+                    }
+                });
+            }
+        } catch (dailyDataError) {
+            console.log(`⚠️ Could not get history from DailySoiCauData, fallback to SoiCau: ${dailyDataError.message}`);
+        }
+
+        // Fallback: Lấy từ SoiCau model (model cũ) để backward compatibility
         const detailedHistory = await soiCauService.getDetailedSoiCauHistory(
             parseInt(limit),
             parseInt(days),
@@ -400,7 +483,8 @@ router.get('/history-detailed', async (req, res) => {
                 limit: parseInt(limit),
                 days: parseInt(days),
                 type,
-                history: detailedHistory
+                history: detailedHistory,
+                source: 'SoiCau'
             }
         });
 

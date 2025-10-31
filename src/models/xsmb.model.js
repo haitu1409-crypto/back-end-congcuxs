@@ -63,8 +63,7 @@ xsmbSchema.statics.findByDate = function (date) {
 // Static method để tìm kết quả gần nhất
 xsmbSchema.statics.findLatest = function () {
     return this.findOne({
-        station: 'xsmb',
-        isComplete: true
+        station: 'xsmb'
     }).sort({ drawDate: -1 });
 };
 

@@ -193,8 +193,7 @@ const getPositionPatternStats = async (req, res) => {
         const XSMB = require('../models/xsmb.model');
         const results = await XSMB.find({
             drawDate: { $gte: startOfPeriod, $lte: endOfDay },
-            station: 'xsmb',
-            isComplete: true
+            station: 'xsmb'
         })
             .select('drawDate specialPrize firstPrize secondPrize threePrizes fourPrizes fivePrizes sixPrizes sevenPrizes')
             .sort({ drawDate: -1 })

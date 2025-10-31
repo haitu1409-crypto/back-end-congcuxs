@@ -86,7 +86,6 @@ class XSMBScraperController {
                 page = 1,
                 limit = 10,
                 date,
-                isComplete,
                 sortBy = 'drawDate',
                 sortOrder = 'desc'
             } = req.query;
@@ -104,11 +103,6 @@ class XSMBScraperController {
                     $gte: startOfDay,
                     $lte: endOfDay
                 };
-            }
-
-            // Filter by completeness
-            if (isComplete !== undefined) {
-                query.isComplete = isComplete === 'true';
             }
 
             const sortOptions = {};
