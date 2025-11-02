@@ -192,10 +192,12 @@ async function scrapeXSMB(date, station, isTestMode = false) {
         maDB: 0,
         specialPrize: 0,
     };
+    let formattedResult = null; // Khai báo ở scope ngoài để có thể dùng trong setTimeout
+    let dateObj = null; // Khai báo ở scope ngoài để có thể dùng trong catch block
 
     try {
         const dateParts = date.split('/');
-        const dateObj = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`);
+        dateObj = new Date(`${dateParts[2]}-${dateParts[1]}-${dateParts[0]}`);
         if (isNaN(dateObj.getTime())) {
             throw new Error('Ngày không hợp lệ: ' + date);
         }
@@ -327,7 +329,7 @@ async function scrapeXSMB(date, station, isTestMode = false) {
                 // Chuẩn hoá số lượng phần tử theo chuẩn XSMB 1 ngày
                 const normalize = (arr, count) => (Array.isArray(arr) ? arr.filter(x => /^\d+$/.test(x)).slice(0, count) : []).concat(Array(Math.max(0, count - (Array.isArray(arr) ? arr.filter(x => /^\d+$/.test(x)).slice(0, count).length : 0))).fill('...'));
 
-                const formattedResult = {
+                formattedResult = {
                     drawDate: dateObj,
                     slug,
                     year: dateObj.getFullYear(),
@@ -347,6 +349,9 @@ async function scrapeXSMB(date, station, isTestMode = false) {
                     station,
                     createdAt: new Date(),
                 };
+
+                // Khai báo changes array trước khi sử dụng
+                const changes = [];
 
                 // Thử lại cào maDB nếu chưa hoàn thành
                 if (!completedPrizes.maDB && iteration % 5 === 0) {
@@ -370,8 +375,6 @@ async function scrapeXSMB(date, station, isTestMode = false) {
                     { key: 'maDB', data: formattedResult.maDB, isArray: false, minLength: 1 },
                     { key: 'specialPrize', data: formattedResult.specialPrize, isArray: true, minLength: 1 },
                 ];
-
-                const changes = [];
                 for (const { key, data, isArray, minLength } of prizeTypes) {
                     if (isArray) {
                         if (!Array.isArray(data)) {
@@ -405,6 +408,8 @@ async function scrapeXSMB(date, station, isTestMode = false) {
                 formattedResult.specialPrize = lastPrizeData.specialPrize;
 
                 // Với trang theo ngày (tĩnh), sau lần cào đầu tiên là dừng
+                await logPerformance(iterationStart, iteration, true);
+                successCount += 1;
                 isStopped = true;
                 clearInterval(intervalId);
                 await saveToMongoDB(formattedResult);
@@ -424,9 +429,6 @@ async function scrapeXSMB(date, station, isTestMode = false) {
                 if (page && !page.isClosed()) await page.close();
                 if (browser) await browser.close();
                 return;
-
-                await logPerformance(iterationStart, iteration, true);
-                successCount += 1;
             } catch (error) {
                 console.error(`Lỗi khi cào dữ liệu ngày ${date}:`, error.message);
                 await logPerformance(iterationStart, iteration, false);
@@ -444,8 +446,10 @@ async function scrapeXSMB(date, station, isTestMode = false) {
                 isStopped = true;
                 clearInterval(intervalId);
                 console.log(`Dữ liệu ngày ${date} cho ${station} dừng sau 20 phút.`);
-                await saveToMongoDB(formattedResult);
-                await setRedisExpiration(formatDateToDDMMYYYY(dateObj));
+                if (formattedResult) {
+                    await saveToMongoDB(formattedResult);
+                    await setRedisExpiration(formatDateToDDMMYYYY(dateObj));
+                }
 
                 const totalDuration = (Date.now() - startTime) / 1000;
                 const stats = await pidusage(process.pid);

@@ -8,7 +8,7 @@ const giaiDacBietStatsSchema = new mongoose.Schema({
     days: {
         type: Number,
         required: true,
-        enum: [10, 20, 30, 60, 90, 180, 270, 365]
+        enum: [10, 20, 30, 60, 90, 100, 120, 150, 180, 270, 365]
     },
     statistics: [{
         number: { type: String, required: true },

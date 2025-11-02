@@ -14,14 +14,15 @@ const formatDate = (date) => {
     return `${day}/${month}/${year}`;
 };
 
-// Parse date from DD/MM/YYYY or DD-MM-YYYY
+// Parse date from DD/MM/YYYY or DD-MM-YYYY or D/M/YYYY
 const parseDate = (dateStr) => {
     let normalizedStr = dateStr;
     if (dateStr.includes('-')) {
         normalizedStr = dateStr.replace(/-/g, '/');
     }
-    if (!normalizedStr || !/^\d{2}\/\d{2}\/\d{4}$/.test(normalizedStr)) {
-        throw new Error('Định dạng ngày không hợp lệ. Vui lòng sử dụng DD/MM/YYYY hoặc DD-MM-YYYY.');
+    // Chấp nhận cả DD/MM/YYYY và D/M/YYYY
+    if (!normalizedStr || !/^\d{1,2}\/\d{1,2}\/\d{4}$/.test(normalizedStr)) {
+        throw new Error('Định dạng ngày không hợp lệ. Vui lòng sử dụng DD/MM/YYYY hoặc D/M/YYYY.');
     }
     const [day, month, year] = normalizedStr.split('/').map(Number);
     if (day < 1 || day > 31 || month < 1 || month > 12 || year < 2000 || year > new Date().getFullYear()) {

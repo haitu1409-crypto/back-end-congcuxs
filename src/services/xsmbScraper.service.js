@@ -2,6 +2,9 @@ const puppeteer = require('puppeteer');
 const XSMB = require('../models/xsmb.model');
 const database = require('../config/database');
 
+// Helper function để delay (thay thế page.waitForTimeout đã deprecated)
+const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
 class XSMBScraperService {
     constructor() {
         this.isRunning = false;
@@ -54,7 +57,7 @@ class XSMBScraperService {
      */
     async saveToMongoDB(result) {
         try {
-            if (!database.getConnectionStatus().state === 'connected') {
+            if (database.getConnectionStatus().state !== 'connected') {
                 await database.connect();
             }
 
@@ -206,7 +209,7 @@ class XSMBScraperService {
 
             // Điều hướng đến trang
             await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            await page.waitForTimeout(2000); // Chờ trang load
+            await delay(2000); // Chờ trang load
 
             let isComplete = false;
             let lastResult = null;
@@ -299,13 +302,13 @@ class XSMBScraperService {
                     }
 
                     // Chờ trước khi cào lại
-                    await page.waitForTimeout(isTestMode ? 1000 : 2000);
+                    await delay(isTestMode ? 1000 : 2000);
                     successCount++;
 
                 } catch (error) {
                     console.error(`❌ Lỗi lần cào ${iteration}:`, error.message);
                     errorCount++;
-                    await page.waitForTimeout(2000);
+                    await delay(2000);
                 }
             }
 
@@ -368,7 +371,11 @@ class XSMBScraperService {
      */
     async scrapeToday() {
         const today = new Date();
-        const dateStr = this.formatDateToDDMMYYYY(today).replace(/-/g, '/');
+        // Format date thành DD/MM/YYYY để match với scrapeXSMB
+        const day = String(today.getDate()).padStart(2, '0');
+        const month = String(today.getMonth() + 1).padStart(2, '0');
+        const year = today.getFullYear();
+        const dateStr = `${day}/${month}/${year}`;
         return await this.scrapeXSMB(dateStr, 'xsmb', false);
     }
 

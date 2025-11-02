@@ -38,6 +38,9 @@ const getFilterRange = (days, type = 'specialPrize') => {
         30: { maxDays: 30, description: '30 ngày' },
         60: { maxDays: 60, description: '2 tháng' },
         90: { maxDays: 90, description: '3 tháng' },
+        100: { maxDays: 100, description: '100 ngày' },
+        120: { maxDays: 120, description: '4 tháng' },
+        150: { maxDays: 150, description: '5 tháng' },
         180: { maxDays: 180, description: '6 tháng' },
         270: { maxDays: 270, description: '9 tháng' },
         365: { maxDays: 365, description: '1 năm' },
@@ -348,10 +351,10 @@ const calculateLoGan = async (days) => {
 // Hàm lấy danh sách giải đặc biệt
 const calculateSpecialPrizeStats = async (days) => {
     try {
-        const validDaysOptions = [10, 20, 30, 60, 90, 180, 270, 365];
+        const validDaysOptions = [10, 20, 30, 60, 90, 100, 120, 150, 180, 270, 365];
         const daysNum = Number(days);
         if (!validDaysOptions.includes(daysNum)) {
-            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 10, 20, 30, 60, 90, 180, 270, 365.');
+            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 10, 20, 30, 60, 90, 100, 120, 150, 180, 270, 365.');
         }
 
         const { maxDays, description } = getFilterRange(daysNum, 'specialPrize');
