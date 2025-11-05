@@ -248,8 +248,29 @@ const heavyApiLimiter = rateLimit({
     // onLimitReached deprecated in express-rate-limit v7 - removed
 });
 
+// Rate limiter riêng cho Chat API - Cần limit cao hơn cho real-time
+const chatApiLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: isDevelopment ? 10000 : 5000, // Cao hơn cho chat (nhiều requests real-time)
+    message: {
+        error: 'Too Many Requests',
+        message: 'Quá nhiều requests chat từ IP này, vui lòng thử lại sau.',
+        retryAfter: Math.ceil(15 * 60 * 1000 / 1000)
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    skip: (req) => {
+        // Skip rate limiting for socket.io polling
+        return req.path.includes('/socket.io/');
+    }
+});
+
 // Áp dụng rate limiting cho tất cả API routes
 app.use('/api/', limiter);
+
+// Áp dụng rate limiting cho Chat API (cao hơn vì real-time)
+app.use('/api/chat/', chatApiLimiter);
+app.use('/api/admin/', chatApiLimiter);
 
 // Áp dụng rate limiting nặng hơn cho các API cụ thể
 app.use('/api/soicau-page/', heavyApiLimiter);
