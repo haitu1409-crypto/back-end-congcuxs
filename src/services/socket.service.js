@@ -67,6 +67,10 @@ const initializeSocket = (server, redis) => {
         try {
             // Update user status to online
             await updateUserStatus(userId, 'online', socket.id);
+            
+            // Join personal room for real-time notifications
+            socket.join(`user:${userId}`);
+            console.log(`📱 User joined personal room: user:${userId}`);
 
             // Join user to their rooms first
             await joinUserRooms(socket, userId, userRole);
@@ -359,6 +363,39 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                     await redisClient.expire(`room:${roomId}:messages:recent`, 3600); // 1 hour
                 } catch (error) {
                     // Silently fail if Redis is not available
+                }
+            }
+            
+            // 🔥 REAL-TIME: If private chat, notify the other user instantly
+            if (room.type === 'private') {
+                const otherParticipant = room.participants.find(
+                    p => p.userId.toString() !== userId.toString()
+                );
+                
+                if (otherParticipant) {
+                    const otherUserId = otherParticipant.userId.toString();
+                    
+                    // Get current unread count for this room
+                    const unreadMessages = await Message.countDocuments({
+                        roomId: roomId,
+                        senderId: { $ne: otherUserId },
+                        readBy: { $ne: otherUserId },
+                        isDeleted: false
+                    });
+                    
+                    // Emit to the other user's personal room (instant notification!)
+                    io.to(`user:${otherUserId}`).emit('private:message:new', {
+                        fromUserId: userId,
+                        fromUsername: user.username,
+                        fromDisplayName: user.displayName,
+                        fromAvatar: senderAvatar,
+                        roomId: roomId,
+                        unreadCount: unreadMessages,
+                        messagePreview: content.trim().substring(0, 50),
+                        timestamp: Date.now()
+                    });
+                    
+                    console.log(`🔔 Notified user ${otherUserId} about new message from ${user.username}`);
                 }
             }
 

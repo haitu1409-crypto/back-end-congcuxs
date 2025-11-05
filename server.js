@@ -248,10 +248,10 @@ const heavyApiLimiter = rateLimit({
     // onLimitReached deprecated in express-rate-limit v7 - removed
 });
 
-// Rate limiter riêng cho Chat API - Cần limit cao hơn cho real-time
+// Rate limiter riêng cho Chat API - ULTRA HIGH LIMIT cho real-time
 const chatApiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: isDevelopment ? 10000 : 5000, // Cao hơn cho chat (nhiều requests real-time)
+    max: isDevelopment ? 50000 : 20000, // ULTRA HIGH: 20000 cho production (tăng 4x)
     message: {
         error: 'Too Many Requests',
         message: 'Quá nhiều requests chat từ IP này, vui lòng thử lại sau.',
