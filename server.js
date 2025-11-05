@@ -28,6 +28,9 @@ const ultraAdvancedSoiCauRoutes = require('./src/routes/ultraAdvancedSoiCau.rout
 const bachThuDeRoutes = require('./src/routes/bachThuDe.routes');
 const schedulerRoutes = require('./src/routes/scheduler.routes');
 const testRoutes = require('./src/routes/test.routes');
+const authRoutes = require('./src/routes/auth.routes');
+const chatRoutes = require('./src/routes/chat.routes');
+const adminRoutes = require('./src/routes/admin.routes');
 
 const database = require('./src/config/database');
 const xsmbScheduler = require('./src/services/xsmbScheduler.service');
@@ -40,7 +43,8 @@ const PORT = process.env.PORT || 5000;
 // Security middleware
 app.use(helmet({
     contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false
+    crossOriginEmbedderPolicy: false,
+    crossOriginResourcePolicy: { policy: "cross-origin" }
 }));
 
 // CORS configuration
@@ -352,8 +356,39 @@ app.use('/api/scheduler', schedulerRoutes);
 app.use('/api/test', testRoutes);
 app.use('/api', uploadRoutes);
 
-// Serve static files from uploads directory
-app.use('/uploads', express.static('uploads'));
+// Auth routes
+app.use('/api/auth', authRoutes);
+
+// Chat routes
+app.use('/api/chat', chatRoutes);
+
+// Admin routes
+app.use('/api/admin', adminRoutes);
+
+// Serve static files from uploads directory with CORS headers
+app.use('/uploads', (req, res, next) => {
+    // Set CORS headers for static files
+    const origin = req.headers.origin;
+    if (!origin) {
+        // Allow requests with no origin (direct access)
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    } else if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    }
+    res.setHeader('Cross-Origin-Resource-Policy', 'cross-origin');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+    next();
+}, express.static('uploads', {
+    setHeaders: (res, path) => {
+        // Set cache headers for images
+        if (path.endsWith('.png') || path.endsWith('.jpg') || path.endsWith('.jpeg') || 
+            path.endsWith('.gif') || path.endsWith('.webp')) {
+            res.setHeader('Cache-Control', 'public, max-age=3600');
+        }
+    }
+}));
 
 // 404 handler
 app.use('*', (req, res) => {
@@ -388,6 +423,67 @@ const startServer = async () => {
             console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
             console.log(`✅ Root endpoint available at: http://localhost:${PORT}/`);
         });
+
+        // Initialize Socket.io for real-time chat
+        let redisClient = null;
+        let redisErrorLogged = false; // Flag để tránh spam log
+        try {
+            // Try to connect Redis (optional)
+            if (process.env.REDIS_URL) {
+                const redis = require('redis');
+                redisClient = redis.createClient({
+                    url: process.env.REDIS_URL,
+                    socket: {
+                        reconnectStrategy: (retries) => {
+                            // Disable auto-reconnect để tránh spam log
+                            if (retries > 3) {
+                                return false; // Stop reconnecting after 3 retries
+                            }
+                            return retries * 100; // Exponential backoff
+                        }
+                    }
+                });
+                
+                // Only log error once
+                redisClient.on('error', (err) => {
+                    if (!redisErrorLogged) {
+                        console.warn('⚠️ Redis connection error:', err.message);
+                        console.log('🔄 Continuing without Redis cache...');
+                        redisErrorLogged = true;
+                    }
+                });
+                
+                redisClient.on('connect', () => {
+                    console.log('✅ Redis connected for caching');
+                    redisErrorLogged = false; // Reset flag on successful connection
+                });
+                
+                // Try to connect with timeout
+                const connectPromise = redisClient.connect().catch((err) => {
+                    if (!redisErrorLogged) {
+                        console.log('⚠️ Redis not available, continuing without cache');
+                        redisErrorLogged = true;
+                    }
+                });
+                
+                // Set timeout for connection attempt
+                await Promise.race([
+                    connectPromise,
+                    new Promise((resolve) => setTimeout(resolve, 3000)) // 3 second timeout
+                ]);
+            }
+        } catch (error) {
+            if (!redisErrorLogged) {
+                console.warn('⚠️ Redis setup failed:', error.message);
+                console.log('🔄 Continuing without Redis cache...');
+                redisErrorLogged = true;
+            }
+        }
+
+        // Initialize Socket.io
+        const { initializeSocket } = require('./src/services/socket.service');
+        initializeSocket(server, redisClient);
+        console.log('✅ Socket.io initialized for real-time chat');
 
         // Kết nối MongoDB trong background (không block server start)
         const connectMongoDBInBackground = async () => {
