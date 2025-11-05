@@ -249,19 +249,42 @@ const heavyApiLimiter = rateLimit({
 });
 
 // Rate limiter riêng cho Chat API - ULTRA HIGH LIMIT cho real-time
+// Rate limit per user (not per IP) để tránh 429 khi nhiều users share IP
 const chatApiLimiter = rateLimit({
     windowMs: 15 * 60 * 1000, // 15 minutes
-    max: isDevelopment ? 50000 : 20000, // ULTRA HIGH: 20000 cho production (tăng 4x)
+    max: isDevelopment ? 100000 : 100000, // ULTRA HIGH: 100000 cho production (tăng gấp đôi)
     message: {
         error: 'Too Many Requests',
-        message: 'Quá nhiều requests chat từ IP này, vui lòng thử lại sau.',
+        message: 'Quá nhiều requests chat, vui lòng thử lại sau.',
         retryAfter: Math.ceil(15 * 60 * 1000 / 1000)
     },
     standardHeaders: true,
     legacyHeaders: false,
+    keyGenerator: (req) => {
+        // Rate limit per user ID if authenticated, otherwise per IP
+        // This prevents 429 when multiple users share same IP (NAT, proxy, etc.)
+        return req.userId || req.ip || 'anonymous';
+    },
     skip: (req) => {
         // Skip rate limiting for socket.io polling
         return req.path.includes('/socket.io/');
+    }
+});
+
+// Rate limiter riêng cho mark as read - VERY HIGH (vì được gọi nhiều)
+const markAsReadLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: isDevelopment ? 100000 : 100000, // Rất cao vì mark as read được gọi thường xuyên
+    message: {
+        error: 'Too Many Requests',
+        message: 'Quá nhiều requests đánh dấu đã đọc, vui lòng thử lại sau.',
+        retryAfter: Math.ceil(15 * 60 * 1000 / 1000)
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+    keyGenerator: (req) => {
+        // Rate limit per user, not per IP (for mark as read)
+        return req.userId || req.ip;
     }
 });
 

@@ -15,10 +15,18 @@ class Database {
             const mongoUri = process.env.MONGODB_URI || process.env.DATABASE_URL || 'mongodb://localhost:27017/dande_thongke';
 
             const options = {
-                maxPoolSize: 10,
+                // 🔥 FIX: Increased from 10 to 50 for handling 100+ concurrent users
+                // 100 users sending messages = 500-800 concurrent DB queries
+                // Need at least 50 connections to avoid queue buildup
+                maxPoolSize: parseInt(process.env.MONGODB_POOL_SIZE) || 50,
+                minPoolSize: 5, // Maintain minimum connections for faster response
                 serverSelectionTimeoutMS: 5000,
                 socketTimeoutMS: 45000,
-                bufferCommands: false
+                bufferCommands: false,
+                // Additional optimizations for high concurrency
+                maxIdleTimeMS: 30000, // Close idle connections after 30s
+                connectTimeoutMS: 10000, // Connection timeout
+                heartbeatFrequencyMS: 10000 // Heartbeat every 10s
             };
 
             this.connection = await mongoose.connect(mongoUri, options);

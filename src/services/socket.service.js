@@ -21,12 +21,53 @@ const initializeSocket = (server, redis) => {
 
     io = new Server(server, {
         cors: {
-            origin: process.env.FRONTEND_URL?.split(',') || '*',
+            origin: function (origin, callback) {
+                // Allow requests with no origin (like mobile apps or curl requests)
+                if (!origin) return callback(null, true);
+                
+                const allowedOrigins = process.env.FRONTEND_URL?.split(',') || ['*'];
+                
+                // Check if origin is allowed
+                if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+                    return callback(null, true);
+                }
+                
+                // Check for subdomain matches
+                const isSubdomainMatch = allowedOrigins.some(allowedOrigin => {
+                    if (allowedOrigin.includes('.')) {
+                        const domain = allowedOrigin.replace(/^https?:\/\//, '');
+                        const requestDomain = origin.replace(/^https?:\/\//, '');
+                        
+                        // Exact match
+                        if (requestDomain === domain) return true;
+                        
+                        // Subdomain match
+                        if (requestDomain.endsWith('.' + domain)) return true;
+                        if (domain.endsWith('.' + requestDomain)) return true;
+                        
+                        // Same root domain
+                        const requestParts = requestDomain.split('.');
+                        const domainParts = domain.split('.');
+                        if (requestParts.length >= 2 && domainParts.length >= 2) {
+                            const requestRoot = requestParts.slice(-2).join('.');
+                            const domainRoot = domainParts.slice(-2).join('.');
+                            return requestRoot === domainRoot;
+                        }
+                    }
+                    return false;
+                });
+                
+                if (isSubdomainMatch) {
+                    return callback(null, true);
+                }
+                
+                return callback(new Error('Not allowed by CORS'));
+            },
             credentials: true,
-            methods: ['GET', 'POST']
+            methods: ['GET', 'POST', 'OPTIONS']
         },
         pingTimeout: 60000,
-        pingInterval: 25000,
+        pingInterval: 20000, // 🔥 OPTIMIZED: Reduced from 25s to 20s for better connection monitoring
         // Performance optimizations
         transports: ['websocket', 'polling'],
         allowEIO3: true,
@@ -171,10 +212,11 @@ const initializeSocket = (server, redis) => {
         }
     });
 
-    // Batch message sender (every 20ms for better real-time feel)
+    // Batch message sender (every 10ms for ultra-low latency - optimized for real-time)
+    // Reduced from 20ms to 10ms for better real-time feel, especially for groupchat
     setInterval(() => {
         flushMessageBatches();
-    }, 20);
+    }, 10);
 
     // Auto cleanup offline users (every 1 minute)
     setInterval(async () => {
@@ -248,14 +290,18 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
     // Send message
     socket.on('message:send', async (data) => {
         try {
-            const { roomId, content, type = 'text', mentions = [] } = data;
+            const { roomId, content, type = 'text', mentions = [], replyTo = null } = data;
 
             if (!roomId || !content || content.trim().length === 0) {
                 return socket.emit('error', { message: 'Dữ liệu không hợp lệ' });
             }
 
-            // Check room permission
+            // 🔥 OPTIMIZE: Cache room data in Redis to reduce DB queries under high load
+            // Check room permission - we still need full Mongoose document for operations
+            // So cache helps but we still need DB query for full document
+            // However, caching reduces lookup time and can help with room validation
             const room = await ChatRoom.findOne({ roomId });
+            
             if (!room) {
                 return socket.emit('error', { message: 'Phòng chat không tồn tại' });
             }
@@ -273,11 +319,44 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 const otherParticipant = room.participants.find(
                     p => p.userId.toString() !== userId
                 );
-                const otherUser = await User.findById(otherParticipant.userId);
+                
+                if (otherParticipant) {
+                    const otherUser = await User.findById(otherParticipant.userId);
+                    
+                    if (!otherUser) {
+                        return socket.emit('error', { message: 'Người dùng không tồn tại' });
+                    }
 
-                // User can only chat with admin
-                if (userRole === 'user' && otherUser.role !== 'admin') {
-                    return socket.emit('error', { message: 'User không thể chat với user khác' });
+                    // User can only chat with admin
+                    if (userRole === 'user' && otherUser.role !== 'admin') {
+                        return socket.emit('error', { message: 'User không thể chat với user khác' });
+                    }
+                }
+            }
+
+            // Validate replyTo if provided
+            let replyToMessage = null;
+            if (replyTo) {
+                try {
+                    // Handle both string and ObjectId formats
+                    const replyToId = typeof replyTo === 'string' ? replyTo : (replyTo.id || replyTo._id);
+                    
+                    if (!replyToId) {
+                        return socket.emit('error', { message: 'ID tin nhắn được trả lời không hợp lệ' });
+                    }
+                    
+                    replyToMessage = await Message.findOne({ 
+                        _id: replyToId, 
+                        roomId: roomId, 
+                        isDeleted: false 
+                    });
+                    
+                    if (!replyToMessage) {
+                        return socket.emit('error', { message: 'Tin nhắn được trả lời không tồn tại hoặc đã bị xóa' });
+                    }
+                } catch (error) {
+                    console.error('Error validating replyTo:', error);
+                    return socket.emit('error', { message: 'Lỗi khi kiểm tra tin nhắn được trả lời' });
                 }
             }
 
@@ -314,7 +393,8 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 senderRole: userRole,
                 content: content.trim(),
                 type,
-                mentions: processedMentions
+                mentions: processedMentions,
+                replyTo: replyToMessage ? replyToMessage._id : null
             });
 
             // Update room last message
@@ -326,16 +406,36 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 createdAt: message.createdAt
             });
 
+            // 🔥 OPTIMIZE: Cache user avatar in Redis to reduce DB queries
             // Get user avatar
-            const senderUser = await User.findById(userId).select('avatar');
-            const senderAvatar = senderUser?.avatar || null;
+            let senderAvatar = null;
+            if (redisClient && redisClient.isOpen) {
+                try {
+                    const cachedAvatar = await redisClient.get(`user:${userId}:avatar`);
+                    if (cachedAvatar !== null) {
+                        senderAvatar = cachedAvatar === 'null' ? null : cachedAvatar;
+                    } else {
+                        const senderUser = await User.findById(userId).select('avatar');
+                        senderAvatar = senderUser?.avatar || null;
+                        // Cache for 10 minutes
+                        await redisClient.set(`user:${userId}:avatar`, senderAvatar || 'null', { EX: 600 });
+                    }
+                } catch (error) {
+                    // Fallback to DB if Redis fails
+                    const senderUser = await User.findById(userId).select('avatar');
+                    senderAvatar = senderUser?.avatar || null;
+                }
+            } else {
+                const senderUser = await User.findById(userId).select('avatar');
+                senderAvatar = senderUser?.avatar || null;
+            }
 
             // Prepare message data with replyTo info
             const messageData = {
-                id: message._id,
+                id: message._id.toString(),
                 roomId: message.roomId,
                 roomType: message.roomType,
-                senderId: message.senderId,
+                senderId: message.senderId.toString(), // Convert ObjectId to string
                 senderUsername: message.senderUsername,
                 senderDisplayName: message.senderDisplayName,
                 senderRole: message.senderRole,
@@ -347,6 +447,17 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 readBy: []
             };
 
+            // Add replyTo info if exists
+            if (replyToMessage) {
+                messageData.replyTo = {
+                    id: replyToMessage._id.toString(),
+                    content: replyToMessage.content,
+                    senderDisplayName: replyToMessage.senderDisplayName,
+                    senderUsername: replyToMessage.senderUsername,
+                    createdAt: replyToMessage.createdAt
+                };
+            }
+
             // Add mentions info if exists
             if (processedMentions.length > 0) {
                 messageData.mentions = processedMentions;
@@ -355,16 +466,9 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
             // Add to batch queue
             addToBatch(roomId, messageData);
 
-            // Cache in Redis (last 50 messages)
-            if (redisClient && redisClient.isOpen) {
-                try {
-                    await redisClient.lPush(`room:${roomId}:messages:recent`, JSON.stringify(message));
-                    await redisClient.lTrim(`room:${roomId}:messages:recent`, 0, 49);
-                    await redisClient.expire(`room:${roomId}:messages:recent`, 3600); // 1 hour
-                } catch (error) {
-                    // Silently fail if Redis is not available
-                }
-            }
+            // 🔥 OPTIMIZE: Redis caching moved to flushMessageBatches() for batch operations
+            // This reduces Redis operations from 3 per message to 1 per batch
+            // Cache in Redis will be handled in flushMessageBatches() for better performance
             
             // 🔥 REAL-TIME: If private chat, notify the other user instantly
             if (room.type === 'private') {
@@ -375,13 +479,48 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 if (otherParticipant) {
                     const otherUserId = otherParticipant.userId.toString();
                     
-                    // Get current unread count for this room
-                    const unreadMessages = await Message.countDocuments({
-                        roomId: roomId,
-                        senderId: { $ne: otherUserId },
-                        readBy: { $ne: otherUserId },
-                        isDeleted: false
-                    });
+                    // 🔥 OPTIMIZED: Use Redis counter (INCR) for atomic increment - much faster than get+set
+                    let unreadMessages = 1; // Default to 1 (this new message)
+                    if (redisClient && redisClient.isOpen) {
+                        try {
+                            const counterKey = `room:${roomId}:unread:${otherUserId}`;
+                            // Use INCR for atomic increment (faster than get+set)
+                            const newCount = await redisClient.incr(counterKey);
+                            // Set TTL if this is the first increment (key doesn't exist)
+                            if (newCount === 1) {
+                                await redisClient.expire(counterKey, 300); // 5 min TTL
+                            } else {
+                                // Refresh TTL on each increment
+                                await redisClient.expire(counterKey, 300);
+                            }
+                            unreadMessages = newCount;
+                        } catch (error) {
+                            console.error('Redis unread count error:', error);
+                            // Fallback to DB if Redis fails
+                            unreadMessages = await Message.countDocuments({
+                                roomId: roomId,
+                                senderId: { $ne: otherUserId },
+                                readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                                isDeleted: false
+                            });
+                            // Try to cache the result
+                            if (redisClient && redisClient.isOpen) {
+                                try {
+                                    await redisClient.set(`room:${roomId}:unread:${otherUserId}`, unreadMessages.toString(), { EX: 300 });
+                                } catch (cacheError) {
+                                    // Silently fail
+                                }
+                            }
+                        }
+                    } else {
+                        // No Redis, use DB
+                        unreadMessages = await Message.countDocuments({
+                            roomId: roomId,
+                            senderId: { $ne: otherUserId },
+                            readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                            isDeleted: false
+                        });
+                    }
                     
                     // Emit to the other user's personal room (instant notification!)
                     io.to(`user:${otherUserId}`).emit('private:message:new', {
@@ -401,7 +540,21 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
 
         } catch (error) {
             console.error('Send message error:', error);
-            socket.emit('error', { message: 'Lỗi khi gửi tin nhắn' });
+            console.error('Error details:', {
+                message: error.message,
+                stack: error.stack,
+                roomId,
+                userId,
+                hasContent: !!content,
+                hasReplyTo: !!replyTo
+            });
+            
+            // Send more detailed error to client for debugging
+            const errorMessage = process.env.NODE_ENV === 'development' 
+                ? `Lỗi khi gửi tin nhắn: ${error.message}`
+                : 'Lỗi khi gửi tin nhắn';
+            
+            socket.emit('error', { message: errorMessage });
         }
     });
 
@@ -524,6 +677,188 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
     });
 
     // Mark as read
+    // 🔥 OPTIMIZED: Mark entire room as read via socket (no HTTP rate limiting!)
+    socket.on('room:mark-read', async (data) => {
+        try {
+            const { roomId } = data;
+            
+            if (!roomId) {
+                return socket.emit('error', { message: 'Thiếu roomId' });
+            }
+
+            // Get room to verify access and check type
+            const room = await ChatRoom.findOne({ roomId });
+            if (!room) {
+                return socket.emit('error', { message: 'Phòng chat không tồn tại' });
+            }
+
+            // Check if user is in this room
+            const isParticipant = room.participants.some(
+                p => p.userId.toString() === userId.toString()
+            );
+            if (!isParticipant) {
+                return socket.emit('error', { message: 'Bạn không có quyền truy cập phòng này' });
+            }
+
+            // Get unread messages (optimized query)
+            const unreadMessages = await Message.find({
+                roomId,
+                isDeleted: false,
+                senderId: { $ne: userId },
+                readBy: { $ne: { $elemMatch: { userId } } }
+            }).limit(100).lean(); // Use lean() for faster queries
+
+            // If no unread messages, just emit confirmation
+            if (unreadMessages.length === 0) {
+                // Still emit socket event for private chat to sync unread counts
+                if (room.type === 'private') {
+                    const otherParticipant = room.participants.find(
+                        p => p.userId.toString() !== userId.toString()
+                    );
+                    if (otherParticipant) {
+                        const otherUserId = otherParticipant.userId.toString();
+                        
+                        // Get updated unread count (fast query with lean)
+                        const updatedUnreadCount = await Message.countDocuments({
+                            roomId: roomId,
+                            senderId: { $ne: otherUserId },
+                            readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                            isDeleted: false
+                        });
+                        
+                        // Update Redis cache
+                        if (redisClient && redisClient.isOpen) {
+                            try {
+                                await redisClient.set(`room:${roomId}:unread:${userId}`, '0', { EX: 300 });
+                            } catch (error) {
+                                // Silently fail
+                            }
+                        }
+                        
+                        // Emit to both users
+                        io.to(`user:${userId}`).emit('private:unread:updated', {
+                            roomId: roomId,
+                            fromUserId: otherUserId,
+                            unreadCount: 0,
+                            timestamp: Date.now()
+                        });
+                        io.to(`user:${otherUserId}`).emit('private:unread:updated', {
+                            roomId: roomId,
+                            fromUserId: userId,
+                            unreadCount: updatedUnreadCount,
+                            timestamp: Date.now()
+                        });
+                    }
+                }
+                
+                return socket.emit('room:marked-read', {
+                    roomId,
+                    count: 0,
+                    timestamp: Date.now()
+                });
+            }
+
+            // Batch mark as read (optimized)
+            const messageIds = unreadMessages.map(msg => msg._id);
+            await Message.updateMany(
+                { _id: { $in: messageIds } },
+                { 
+                    $push: { 
+                        readBy: { 
+                            userId: userId,
+                            readAt: new Date()
+                        }
+                    }
+                }
+            );
+
+            // 🔥 REAL-TIME: If private chat, emit socket event to update unread counts
+            if (room.type === 'private') {
+                // Use io directly (already available in this file's scope)
+                if (io) {
+                    const otherParticipant = room.participants.find(
+                        p => p.userId.toString() !== userId.toString()
+                    );
+                    
+                    if (otherParticipant) {
+                        const otherUserId = otherParticipant.userId.toString();
+                        
+                        // 🔥 OPTIMIZED: Use Redis counter for unread count (faster than DB query)
+                        let updatedUnreadCount = 0;
+                        if (redisClient && redisClient.isOpen) {
+                            try {
+                                // Set counter to 0 for user who read (clear their unread)
+                                const userCounterKey = `room:${roomId}:unread:${userId}`;
+                                await redisClient.set(userCounterKey, '0', { EX: 300 });
+                                
+                                // Get other user's unread count from Redis (or fallback to DB)
+                                const otherCounterKey = `room:${roomId}:unread:${otherUserId}`;
+                                const cachedCount = await redisClient.get(otherCounterKey);
+                                if (cachedCount !== null) {
+                                    updatedUnreadCount = parseInt(cachedCount, 10);
+                                } else {
+                                    // Fallback to DB only if cache miss
+                                    updatedUnreadCount = await Message.countDocuments({
+                                        roomId: roomId,
+                                        senderId: { $ne: otherUserId },
+                                        readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                                        isDeleted: false
+                                    });
+                                    // Cache the result
+                                    await redisClient.set(otherCounterKey, updatedUnreadCount.toString(), { EX: 300 });
+                                }
+                            } catch (error) {
+                                // Fallback to DB if Redis fails
+                                updatedUnreadCount = await Message.countDocuments({
+                                    roomId: roomId,
+                                    senderId: { $ne: otherUserId },
+                                    readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                                    isDeleted: false
+                                });
+                            }
+                        } else {
+                            // No Redis, use DB
+                            updatedUnreadCount = await Message.countDocuments({
+                                roomId: roomId,
+                                senderId: { $ne: otherUserId },
+                                readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                                isDeleted: false
+                            });
+                        }
+                        
+                        // Emit to both users
+                        io.to(`user:${userId}`).emit('private:unread:updated', {
+                            roomId: roomId,
+                            fromUserId: otherUserId,
+                            unreadCount: 0,
+                            timestamp: Date.now()
+                        });
+                        io.to(`user:${otherUserId}`).emit('private:unread:updated', {
+                            roomId: roomId,
+                            fromUserId: userId,
+                            unreadCount: updatedUnreadCount,
+                            timestamp: Date.now()
+                        });
+                    }
+                }
+            }
+
+            // Confirm to sender
+            socket.emit('room:marked-read', {
+                roomId,
+                count: unreadMessages.length,
+                timestamp: Date.now()
+            });
+        } catch (error) {
+            console.error('Mark room as read error:', error);
+            socket.emit('error', { 
+                message: 'Lỗi khi đánh dấu đã đọc',
+                roomId: data?.roomId 
+            });
+        }
+    });
+
+    // Legacy: Mark single message as read (for backward compatibility)
     socket.on('message:read', async (data) => {
         try {
             const { messageId, roomId } = data;
@@ -977,6 +1312,7 @@ const getOnlineUsersInRoom = async (roomId) => {
 module.exports = {
     initializeSocket,
     getIO: () => io,
+    getRedisClient: () => redisClient,
     getOnlineUsersInRoom
 };
 

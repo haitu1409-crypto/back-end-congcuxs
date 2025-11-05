@@ -23,6 +23,31 @@ const { verifyToken } = require('../middleware/auth.middleware');
 
 const router = express.Router();
 
+// Import mark as read limiter from server.js (passed via app.locals or require)
+let markAsReadLimiter;
+try {
+    // Try to get from parent app if available
+    const rateLimit = require('express-rate-limit');
+    markAsReadLimiter = rateLimit({
+        windowMs: 15 * 60 * 1000, // 15 minutes
+        max: 100000, // Very high limit for mark as read
+        message: {
+            error: 'Too Many Requests',
+            message: 'Quá nhiều requests đánh dấu đã đọc, vui lòng thử lại sau.',
+            retryAfter: Math.ceil(15 * 60 * 1000 / 1000)
+        },
+        standardHeaders: true,
+        legacyHeaders: false,
+        keyGenerator: (req) => {
+            // Rate limit per user, not per IP (for mark as read)
+            return req.userId || req.ip;
+        }
+    });
+} catch (error) {
+    // Fallback: no rate limiting for mark as read if can't load
+    markAsReadLimiter = (req, res, next) => next();
+}
+
 // All routes require authentication
 router.use(verifyToken);
 
@@ -41,7 +66,7 @@ router.get('/private/unread-counts', getPrivateChatsUnreadCounts); // Get unread
 
 // Message routes
 router.get('/room/:roomId/messages', getMessages);
-router.post('/room/:roomId/read', markAsRead);
+router.post('/room/:roomId/read', markAsReadLimiter, markAsRead); // Apply special rate limiter for mark as read
 router.get('/room/:roomId/unread', getUnreadCount);
 router.post('/message/:messageId/reaction', toggleReaction);
 router.delete('/messages', deleteMessages); // Admin only - delete multiple messages

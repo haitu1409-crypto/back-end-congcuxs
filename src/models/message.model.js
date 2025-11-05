@@ -165,9 +165,12 @@ messageSchema.statics.getMessagesByRoom = async function(roomId, options = {}) {
         if (msg.senderId && typeof msg.senderId === 'object' && msg.senderId.avatar) {
             msg.senderAvatar = msg.senderId.avatar;
         }
-        // Clean up senderId object if it was populated
+        // Clean up senderId object if it was populated - MUST convert to string!
         if (msg.senderId && typeof msg.senderId === 'object') {
-            msg.senderId = msg.senderId._id || msg.senderId;
+            msg.senderId = (msg.senderId._id || msg.senderId).toString();
+        } else if (msg.senderId) {
+            // Ensure senderId is always string
+            msg.senderId = msg.senderId.toString();
         }
         return msg;
     });

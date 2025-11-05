@@ -6,6 +6,7 @@
 const Message = require('../models/message.model');
 const ChatRoom = require('../models/chatRoom.model');
 const User = require('../models/user.model');
+const { getIO, getRedisClient } = require('../services/socket.service');
 
 // Verify chat access code
 exports.verifyChatCode = async (req, res) => {
@@ -379,6 +380,15 @@ exports.markAsRead = async (req, res) => {
         const { roomId } = req.params;
         const userId = req.userId;
 
+        // Get room to check if it's private chat
+        const room = await ChatRoom.findOne({ roomId });
+        if (!room) {
+            return res.status(404).json({
+                success: false,
+                message: 'Phòng chat không tồn tại'
+            });
+        }
+
         // Get unread messages
         const unreadMessages = await Message.find({
             roomId,
@@ -387,10 +397,104 @@ exports.markAsRead = async (req, res) => {
             readBy: { $ne: { $elemMatch: { userId } } }
         }).limit(100);
 
+        // 🔥 OPTIMIZATION: Skip if no unread messages (avoid unnecessary DB operations)
+        if (unreadMessages.length === 0) {
+            // Still emit socket event for private chat to sync unread counts
+            if (room.type === 'private') {
+                const io = getIO();
+                if (io) {
+                    const otherParticipant = room.participants.find(
+                        p => p.userId.toString() !== userId.toString()
+                    );
+                    if (otherParticipant) {
+                        const otherUserId = otherParticipant.userId.toString();
+                        const updatedUnreadCount = await Message.countDocuments({
+                            roomId: roomId,
+                            senderId: { $ne: otherUserId },
+                            readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                            isDeleted: false
+                        });
+                        io.to(`user:${userId}`).emit('private:unread:updated', {
+                            roomId: roomId,
+                            fromUserId: otherUserId,
+                            unreadCount: 0,
+                            timestamp: Date.now()
+                        });
+                        io.to(`user:${otherUserId}`).emit('private:unread:updated', {
+                            roomId: roomId,
+                            fromUserId: userId,
+                            unreadCount: updatedUnreadCount,
+                            timestamp: Date.now()
+                        });
+                    }
+                }
+            }
+            
+            return res.json({
+                success: true,
+                message: 'Đã đánh dấu đã đọc',
+                data: {
+                    count: 0
+                }
+            });
+        }
+
         // Mark as read
         await Promise.all(
             unreadMessages.map(msg => msg.markAsRead(userId))
         );
+
+        // 🔥 REAL-TIME: If private chat, emit socket event to update unread counts
+        if (room.type === 'private') {
+            const io = getIO();
+            if (io) {
+                // Find the other participant
+                const otherParticipant = room.participants.find(
+                    p => p.userId.toString() !== userId.toString()
+                );
+                
+                if (otherParticipant) {
+                    const otherUserId = otherParticipant.userId.toString();
+                    
+                    // Get updated unread count (should be 0 now for the user who read)
+                    const updatedUnreadCount = await Message.countDocuments({
+                        roomId: roomId,
+                        senderId: { $ne: otherUserId },
+                        readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                        isDeleted: false
+                    });
+                    
+                    // Update Redis cache for the user who read (clear their unread)
+                    const redisClient = getRedisClient();
+                    if (redisClient && redisClient.isOpen) {
+                        try {
+                            await redisClient.set(`room:${roomId}:unread:${userId}`, '0', { EX: 300 });
+                        } catch (error) {
+                            // Silently fail if Redis is not available
+                        }
+                    }
+                    
+                    // Emit to both users to update their unread counts
+                    // Emit to the user who read (to update their own count for this conversation)
+                    io.to(`user:${userId}`).emit('private:unread:updated', {
+                        roomId: roomId,
+                        fromUserId: otherUserId,
+                        unreadCount: 0, // User just read, so their unread from this person is 0
+                        timestamp: Date.now()
+                    });
+                    
+                    // Emit to the other user if they're online (to update their count)
+                    io.to(`user:${otherUserId}`).emit('private:unread:updated', {
+                        roomId: roomId,
+                        fromUserId: userId,
+                        unreadCount: updatedUnreadCount, // Other user's unread count from this user
+                        timestamp: Date.now()
+                    });
+                    
+                    console.log(`📖 Marked as read: room ${roomId}, updated unread count for user ${otherUserId}: ${updatedUnreadCount}`);
+                }
+            }
+        }
 
         res.json({
             success: true,
@@ -400,6 +504,15 @@ exports.markAsRead = async (req, res) => {
             }
         });
     } catch (error) {
+        // Handle rate limit errors gracefully
+        if (error.status === 429 || error.message?.includes('Too Many Requests')) {
+            return res.status(429).json({
+                success: false,
+                message: 'Quá nhiều requests đánh dấu đã đọc, vui lòng đợi vài giây rồi thử lại.',
+                retryAfter: 5 // seconds
+            });
+        }
+        
         console.error('Mark as read error:', error);
         res.status(500).json({
             success: false,
