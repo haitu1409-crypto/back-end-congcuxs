@@ -415,7 +415,7 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                     if (cachedAvatar !== null) {
                         senderAvatar = cachedAvatar === 'null' ? null : cachedAvatar;
                     } else {
-                        const senderUser = await User.findById(userId).select('avatar');
+            const senderUser = await User.findById(userId).select('avatar');
                         senderAvatar = senderUser?.avatar || null;
                         // Cache for 10 minutes
                         await redisClient.set(`user:${userId}:avatar`, senderAvatar || 'null', { EX: 600 });
@@ -799,11 +799,11 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                                 } else {
                                     // Fallback to DB only if cache miss
                                     updatedUnreadCount = await Message.countDocuments({
-                                        roomId: roomId,
-                                        senderId: { $ne: otherUserId },
-                                        readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
-                                        isDeleted: false
-                                    });
+                            roomId: roomId,
+                            senderId: { $ne: otherUserId },
+                            readBy: { $ne: { $elemMatch: { userId: otherUserId } } },
+                            isDeleted: false
+                        });
                                     // Cache the result
                                     await redisClient.set(otherCounterKey, updatedUnreadCount.toString(), { EX: 300 });
                                 }
