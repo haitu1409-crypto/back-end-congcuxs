@@ -19,6 +19,7 @@ const {
     createPrivateChat,
     getPrivateChatsUnreadCounts,
     getChatUploadSignature,
+    getChatUploadConfig,
     chatImageUploadMiddleware,
     uploadChatImage
 } = require('../controllers/chat.controller');
@@ -80,6 +81,7 @@ router.put('/message/:messageId', editMessage); // Edit message (user within 5 m
 router.get('/rooms', getMyChatRooms);
 
 // Media upload
+router.get('/media/config', getChatUploadConfig);
 router.get('/media/signature', getChatUploadSignature);
 router.post('/media/image', chatImageUploadMiddleware, uploadChatImage);
 

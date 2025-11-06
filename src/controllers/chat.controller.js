@@ -70,6 +70,36 @@ const buildAttachmentPayload = (cloudinaryResult) => {
 
 const chatImageUploadSingle = chatImageUpload.single('image');
 
+exports.getChatUploadConfig = (req, res) => {
+    try {
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME || null;
+        const mode = CLOUDINARY_UPLOAD_PRESET ? 'preset' : 'signed';
+
+        return res.json({
+            success: true,
+            data: {
+                mode,
+                cloudName,
+                uploadPreset: CLOUDINARY_UPLOAD_PRESET || null,
+                folder: CHAT_IMAGE_FOLDER,
+                uploadUrl: cloudName ? `https://api.cloudinary.com/v1_1/${cloudName}/image/upload` : null,
+                transformation: CHAT_IMAGE_TRANSFORMATION,
+                thumbTransformation: CHAT_IMAGE_THUMB_TRANSFORMATION,
+                maxBytes: CHAT_IMAGE_MAX_BYTES,
+                maxAttachments: MAX_CHAT_IMAGE_ATTACHMENTS,
+                allowedMimeTypes: Array.from(CHAT_IMAGE_ALLOWED_MIME)
+            }
+        });
+    } catch (error) {
+        console.error('Get chat upload config error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Không thể lấy cấu hình upload chat',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
 exports.getChatUploadSignature = async (req, res) => {
     try {
         const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
