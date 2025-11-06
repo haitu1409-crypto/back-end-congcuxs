@@ -23,6 +23,7 @@ const CHAT_IMAGE_ALLOWED_MIME = new Set([
 const CHAT_IMAGE_FOLDER = process.env.CLOUDINARY_CHAT_FOLDER || 'chat_uploads';
 const CHAT_IMAGE_TRANSFORMATION = process.env.CLOUDINARY_CHAT_TRANSFORMATION || 'c_limit,w_1600,h_1600,q_auto,f_auto';
 const CHAT_IMAGE_THUMB_TRANSFORMATION = process.env.CLOUDINARY_CHAT_THUMB_TRANSFORMATION || 'c_limit,w_600,h_600,q_auto,f_auto';
+const CLOUDINARY_UPLOAD_PRESET = process.env.CLOUDINARY_UPLOAD_PRESET || null;
 
 const chatImageUpload = multer({
     storage: multer.memoryStorage(),
@@ -71,6 +72,33 @@ const chatImageUploadSingle = chatImageUpload.single('image');
 
 exports.getChatUploadSignature = async (req, res) => {
     try {
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+        const apiKey = process.env.CLOUDINARY_API_KEY;
+
+        if (!cloudName) {
+            throw new Error('Cloudinary configuration thiếu thông tin cloud name');
+        }
+
+        if (CLOUDINARY_UPLOAD_PRESET) {
+            return res.json({
+                success: true,
+                data: {
+                    mode: 'preset',
+                    uploadPreset: CLOUDINARY_UPLOAD_PRESET,
+                    folder: CHAT_IMAGE_FOLDER,
+                    cloudName,
+                    uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+                    transformation: CHAT_IMAGE_TRANSFORMATION,
+                    thumbTransformation: CHAT_IMAGE_THUMB_TRANSFORMATION,
+                    maxBytes: CHAT_IMAGE_MAX_BYTES
+                }
+            });
+        }
+
+        if (!apiKey || !process.env.CLOUDINARY_API_SECRET) {
+            throw new Error('Cloudinary configuration thiếu API key hoặc secret để ký upload');
+        }
+
         const timestamp = Math.round(Date.now() / 1000);
         const folder = CHAT_IMAGE_FOLDER;
         const userId = req.userId || 'guest';
@@ -89,16 +117,10 @@ exports.getChatUploadSignature = async (req, res) => {
             process.env.CLOUDINARY_API_SECRET
         );
 
-        const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-        const apiKey = process.env.CLOUDINARY_API_KEY;
-
-        if (!cloudName || !apiKey) {
-            throw new Error('Cloudinary configuration thiếu thông tin cloud name hoặc api key');
-        }
-
         return res.json({
             success: true,
             data: {
+                mode: 'signed',
                 timestamp,
                 signature,
                 publicId,
@@ -106,6 +128,8 @@ exports.getChatUploadSignature = async (req, res) => {
                 cloudName,
                 apiKey,
                 uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+                transformation: CHAT_IMAGE_TRANSFORMATION,
+                thumbTransformation: CHAT_IMAGE_THUMB_TRANSFORMATION,
                 maxBytes: CHAT_IMAGE_MAX_BYTES
             }
         });
