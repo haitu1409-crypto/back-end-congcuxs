@@ -7,6 +7,8 @@ const User = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const { validationResult } = require('express-validator');
 
 // Generate JWT token
@@ -85,6 +87,61 @@ const generateUniqueUsername = async (preferred) => {
     }
 
     return candidate;
+};
+
+const uploadsDir = path.join(process.cwd(), 'uploads');
+
+const ensureUploadsDir = () => {
+    if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+    }
+};
+
+const getExtensionFromContentType = (contentType) => {
+    if (!contentType) return '.jpg';
+    if (contentType.includes('png')) return '.png';
+    if (contentType.includes('gif')) return '.gif';
+    if (contentType.includes('webp')) return '.webp';
+    if (contentType.includes('bmp')) return '.bmp';
+    return '.jpg';
+};
+
+const removeOldAvatarIfLocal = (avatarPath) => {
+    if (!avatarPath || avatarPath.startsWith('http')) return;
+    try {
+        const absolutePath = path.join(process.cwd(), avatarPath.startsWith('/uploads') ? avatarPath.substring(1) : avatarPath);
+        if (fs.existsSync(absolutePath)) {
+            fs.unlinkSync(absolutePath);
+        }
+    } catch (error) {
+        console.warn('Failed to remove old avatar:', error.message);
+    }
+};
+
+const downloadFacebookAvatar = async (imageUrl, userIdentifier, currentAvatar) => {
+    if (!imageUrl) return null;
+    try {
+        ensureUploadsDir();
+        const response = await axios.get(imageUrl, {
+            responseType: 'arraybuffer'
+        });
+
+        const contentType = response.headers['content-type'] || '';
+        const extension = getExtensionFromContentType(contentType);
+        const filename = `avatar_fb_${userIdentifier}_${Date.now()}${extension}`;
+        const filePath = path.join(uploadsDir, filename);
+
+        fs.writeFileSync(filePath, response.data);
+
+        if (currentAvatar && currentAvatar !== `/uploads/${filename}`) {
+            removeOldAvatarIfLocal(currentAvatar);
+        }
+
+        return `/uploads/${filename}`;
+    } catch (error) {
+        console.error('Failed to download Facebook avatar:', error.message);
+        return null;
+    }
 };
 
 // Register new user
@@ -477,6 +534,12 @@ exports.facebookCallback = async (req, res) => {
 
         const avatarUrl = profile.picture?.data?.url || null;
 
+        let downloadedAvatarPath = null;
+
+        if (avatarUrl) {
+            downloadedAvatarPath = await downloadFacebookAvatar(avatarUrl, profile.id, user?.avatar);
+        }
+
         if (!user) {
             const username = await generateUniqueUsername(profile.email || profile.name || profile.id);
             const displayName = profile.name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Facebook User';
@@ -487,7 +550,7 @@ exports.facebookCallback = async (req, res) => {
                 email: profile.email ? profile.email.toLowerCase() : undefined,
                 provider: 'facebook',
                 facebookId: profile.id,
-                avatar: avatarUrl,
+                avatar: downloadedAvatarPath || avatarUrl,
                 password: crypto.randomBytes(16).toString('hex')
             });
         } else {
@@ -496,7 +559,9 @@ exports.facebookCallback = async (req, res) => {
             if (profile.email && !user.email) {
                 user.email = profile.email.toLowerCase();
             }
-            if (avatarUrl && user.avatar !== avatarUrl) {
+            if (downloadedAvatarPath) {
+                user.avatar = downloadedAvatarPath;
+            } else if (avatarUrl && (!user.avatar || user.avatar.startsWith('http'))) {
                 user.avatar = avatarUrl;
             }
             if (!user.displayName && profile.name) {
