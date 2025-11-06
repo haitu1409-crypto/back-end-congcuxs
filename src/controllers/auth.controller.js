@@ -7,9 +7,14 @@ const User = require('../models/user.model');
 const jwt = require('jsonwebtoken');
 const axios = require('axios');
 const crypto = require('crypto');
-const fs = require('fs');
-const path = require('path');
 const { validationResult } = require('express-validator');
+const cloudinary = require('cloudinary').v2;
+
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+    api_key: process.env.CLOUDINARY_API_KEY,
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 // Generate JWT token
 const generateToken = (userId, role) => {
@@ -89,59 +94,42 @@ const generateUniqueUsername = async (preferred) => {
     return candidate;
 };
 
-const uploadsDir = path.join(process.cwd(), 'uploads');
+const AVATAR_FOLDER = process.env.CLOUDINARY_AVATAR_FOLDER || 'avatars';
 
-const ensureUploadsDir = () => {
-    if (!fs.existsSync(uploadsDir)) {
-        fs.mkdirSync(uploadsDir, { recursive: true });
-    }
-};
-
-const getExtensionFromContentType = (contentType) => {
-    if (!contentType) return '.jpg';
-    if (contentType.includes('png')) return '.png';
-    if (contentType.includes('gif')) return '.gif';
-    if (contentType.includes('webp')) return '.webp';
-    if (contentType.includes('bmp')) return '.bmp';
-    return '.jpg';
-};
-
-const removeOldAvatarIfLocal = (avatarPath) => {
-    if (!avatarPath || avatarPath.startsWith('http')) return;
-    try {
-        const absolutePath = path.join(process.cwd(), avatarPath.startsWith('/uploads') ? avatarPath.substring(1) : avatarPath);
-        if (fs.existsSync(absolutePath)) {
-            fs.unlinkSync(absolutePath);
-        }
-    } catch (error) {
-        console.warn('Failed to remove old avatar:', error.message);
-    }
-};
-
-const downloadFacebookAvatar = async (imageUrl, userIdentifier, currentAvatar) => {
+const uploadFacebookAvatar = async (imageUrl, userIdentifier) => {
     if (!imageUrl) return null;
+
     try {
-        ensureUploadsDir();
-        const response = await axios.get(imageUrl, {
-            responseType: 'arraybuffer'
+        const result = await cloudinary.uploader.upload(imageUrl, {
+            folder: AVATAR_FOLDER,
+            public_id: `facebook_${userIdentifier}`,
+            overwrite: true,
+            transformation: [{ width: 512, height: 512, crop: 'fill', gravity: 'face' }]
         });
 
-        const contentType = response.headers['content-type'] || '';
-        const extension = getExtensionFromContentType(contentType);
-        const filename = `avatar_fb_${userIdentifier}_${Date.now()}${extension}`;
-        const filePath = path.join(uploadsDir, filename);
-
-        fs.writeFileSync(filePath, response.data);
-
-        if (currentAvatar && currentAvatar !== `/uploads/${filename}`) {
-            removeOldAvatarIfLocal(currentAvatar);
-        }
-
-        return `/uploads/${filename}`;
+        return result.secure_url;
     } catch (error) {
-        console.error('Failed to download Facebook avatar:', error.message);
+        console.error('Failed to upload Facebook avatar to Cloudinary:', error.message);
         return null;
     }
+};
+
+const uploadAvatarBufferToCloudinary = (buffer, userId) => {
+    return new Promise((resolve, reject) => {
+        const uploadStream = cloudinary.uploader.upload_stream({
+            folder: AVATAR_FOLDER,
+            public_id: `user_${userId}_${Date.now()}`,
+            overwrite: true,
+            transformation: [{ width: 512, height: 512, crop: 'fill', gravity: 'face' }]
+        }, (error, result) => {
+            if (error) {
+                return reject(error);
+            }
+            resolve(result);
+        });
+
+        uploadStream.end(buffer);
+    });
 };
 
 // Register new user
@@ -374,41 +362,24 @@ exports.uploadAvatar = async (req, res) => {
         }
 
         const userId = req.userId;
-        const path = require('path');
-        const fs = require('fs');
-
-        // Get file extension from original name
-        const ext = path.extname(req.file.originalname);
-        const newFilename = `avatar_${userId}_${Date.now()}${ext}`;
-        const uploadsDir = path.join(process.cwd(), 'uploads');
-        const newPath = path.join(uploadsDir, newFilename);
-
-        // Rename file to include extension and user ID
-        fs.renameSync(req.file.path, newPath);
-
-        // Get old avatar to delete if exists
         const user = await User.findById(userId);
-        if (user.avatar) {
-            const oldAvatarPath = path.join(uploadsDir, path.basename(user.avatar));
-            if (fs.existsSync(oldAvatarPath)) {
-                try {
-                    fs.unlinkSync(oldAvatarPath);
-                } catch (deleteError) {
-                    console.error('Error deleting old avatar:', deleteError);
-                }
-            }
+        if (!user) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy người dùng'
+            });
         }
 
-        // Update user avatar
-        const avatarUrl = `/uploads/${newFilename}`;
-        user.avatar = avatarUrl;
-        await user.save();
+        const uploadResult = await uploadAvatarBufferToCloudinary(req.file.buffer, userId);
+
+        user.avatar = uploadResult.secure_url;
+        await user.save({ validateBeforeSave: false });
 
         res.json({
             success: true,
             message: 'Upload avatar thành công',
             data: {
-                url: avatarUrl,
+                url: uploadResult.secure_url,
                 user: buildSafeUserResponse(user)
             }
         });
@@ -534,10 +505,10 @@ exports.facebookCallback = async (req, res) => {
 
         const avatarUrl = profile.picture?.data?.url || null;
 
-        let downloadedAvatarPath = null;
+        let cloudAvatarUrl = null;
 
         if (avatarUrl) {
-            downloadedAvatarPath = await downloadFacebookAvatar(avatarUrl, profile.id, user?.avatar);
+            cloudAvatarUrl = await uploadFacebookAvatar(avatarUrl, profile.id);
         }
 
         if (!user) {
@@ -550,7 +521,7 @@ exports.facebookCallback = async (req, res) => {
                 email: profile.email ? profile.email.toLowerCase() : undefined,
                 provider: 'facebook',
                 facebookId: profile.id,
-                avatar: downloadedAvatarPath || avatarUrl,
+                avatar: cloudAvatarUrl || avatarUrl,
                 password: crypto.randomBytes(16).toString('hex')
             });
         } else {
@@ -559,8 +530,8 @@ exports.facebookCallback = async (req, res) => {
             if (profile.email && !user.email) {
                 user.email = profile.email.toLowerCase();
             }
-            if (downloadedAvatarPath) {
-                user.avatar = downloadedAvatarPath;
+            if (cloudAvatarUrl) {
+                user.avatar = cloudAvatarUrl;
             } else if (avatarUrl && (!user.avatar || user.avatar.startsWith('http'))) {
                 user.avatar = avatarUrl;
             }

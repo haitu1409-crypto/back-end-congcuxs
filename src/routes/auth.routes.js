@@ -18,7 +18,6 @@ const {
 const { verifyToken } = require('../middleware/auth.middleware');
 const multer = require('multer');
 const path = require('path');
-const fs = require('fs');
 
 const router = express.Router();
 
@@ -108,8 +107,9 @@ router.get('/facebook', facebookLogin);
 router.get('/facebook/callback', facebookCallback);
 
 // Configure multer for avatar upload
+const storage = multer.memoryStorage();
 const upload = multer({
-    dest: 'uploads/',
+    storage,
     limits: {
         fileSize: 2 * 1024 * 1024, // 2MB limit for avatars
         files: 1
@@ -127,12 +127,6 @@ const upload = multer({
         }
     }
 });
-
-// Create uploads directory if it doesn't exist
-const uploadsDir = path.join(process.cwd(), 'uploads');
-if (!fs.existsSync(uploadsDir)) {
-    fs.mkdirSync(uploadsDir, { recursive: true });
-}
 
 // Protected routes
 router.get('/me', verifyToken, getMe);
