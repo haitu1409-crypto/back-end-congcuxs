@@ -58,6 +58,14 @@ const chatRoomSchema = new mongoose.Schema({
     lastMessage: {
         messageId: mongoose.Schema.Types.ObjectId,
         content: String,
+        type: {
+            type: String,
+            default: 'text'
+        },
+        hasAttachments: {
+            type: Boolean,
+            default: false
+        },
         senderId: mongoose.Schema.Types.ObjectId,
         senderDisplayName: String,
         createdAt: Date
@@ -211,9 +219,27 @@ chatRoomSchema.methods.removeParticipant = async function(userId) {
 
 // Instance method: Update last message
 chatRoomSchema.methods.updateLastMessage = async function(messageData) {
+    const hasAttachments = Array.isArray(messageData.attachments) && messageData.attachments.length > 0;
+    const type = messageData.type || (hasAttachments ? 'image' : 'text');
+
+    let content = messageData.content;
+    if (!content || !content.trim()) {
+        if (type === 'image') {
+            content = '[Đã gửi hình ảnh]';
+        } else if (type === 'file') {
+            content = '[Đã gửi tệp tin]';
+        } else if (type === 'system' && hasAttachments) {
+            content = '[Thông báo hệ thống]';
+        } else {
+            content = '';
+        }
+    }
+
     this.lastMessage = {
         messageId: messageData._id || messageData.id,
-        content: messageData.content,
+        content,
+        type,
+        hasAttachments,
         senderId: messageData.senderId,
         senderDisplayName: messageData.senderDisplayName,
         createdAt: messageData.createdAt || new Date()

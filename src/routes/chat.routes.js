@@ -17,7 +17,10 @@ const {
     deleteMessage,
     editMessage,
     createPrivateChat,
-    getPrivateChatsUnreadCounts
+    getPrivateChatsUnreadCounts,
+    getChatUploadSignature,
+    chatImageUploadMiddleware,
+    uploadChatImage
 } = require('../controllers/chat.controller');
 const { verifyToken } = require('../middleware/auth.middleware');
 
@@ -75,6 +78,10 @@ router.put('/message/:messageId', editMessage); // Edit message (user within 5 m
 
 // Chat rooms
 router.get('/rooms', getMyChatRooms);
+
+// Media upload
+router.get('/media/signature', getChatUploadSignature);
+router.post('/media/image', chatImageUploadMiddleware, uploadChatImage);
 
 module.exports = router;
 

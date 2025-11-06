@@ -35,22 +35,9 @@ const userSchema = new mongoose.Schema({
     },
     password: {
         type: String,
-        required: function () {
-            return this.provider === 'local';
-        },
+        required: [true, 'Mật khẩu là bắt buộc'],
         minlength: [6, 'Mật khẩu phải có ít nhất 6 ký tự'],
         select: false // Không trả về password khi query
-    },
-    provider: {
-        type: String,
-        enum: ['local', 'facebook'],
-        default: 'local',
-        index: true
-    },
-    facebookId: {
-        type: String,
-        unique: true,
-        sparse: true
     },
     role: {
         type: String,
@@ -109,7 +96,6 @@ const userSchema = new mongoose.Schema({
 // Indexes for performance
 userSchema.index({ username: 1 });
 userSchema.index({ email: 1 });
-userSchema.index({ facebookId: 1 });
 userSchema.index({ role: 1, isActive: 1 });
 userSchema.index({ socketId: 1 });
 userSchema.index({ createdAt: -1 });

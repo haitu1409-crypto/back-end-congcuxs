@@ -38,21 +38,47 @@ const messageSchema = new mongoose.Schema({
     },
     content: {
         type: String,
-        required: [true, 'Nội dung tin nhắn là bắt buộc'],
+        default: '',
         trim: true,
-        maxlength: [5000, 'Tin nhắn không được vượt quá 5000 ký tự']
+        maxlength: [5000, 'Tin nhắn không được vượt quá 5000 ký tự'],
+        validate: {
+            validator: function(value) {
+                if (this.type === 'text' || this.type === 'system') {
+                    return value && value.trim().length > 0;
+                }
+                return true;
+            },
+            message: 'Nội dung tin nhắn là bắt buộc'
+        }
     },
     type: {
         type: String,
         enum: ['text', 'image', 'file', 'system'],
         default: 'text'
     },
-    attachments: [{
-        url: String,
-        type: String,
-        size: Number,
-        name: String
-    }],
+    attachments: {
+        type: [{
+            url: String,
+            secureUrl: String,
+            thumbnailUrl: String,
+            publicId: String,
+            resourceType: {
+                type: String,
+                default: 'image'
+            },
+            format: String,
+            bytes: Number,
+            size: Number,
+            width: Number,
+            height: Number,
+            originalFilename: String,
+            name: String,
+            type: {
+                type: String
+            }
+        }],
+        default: []
+    },
     readBy: [{
         userId: {
             type: mongoose.Schema.Types.ObjectId,
@@ -171,6 +197,32 @@ messageSchema.statics.getMessagesByRoom = async function(roomId, options = {}) {
         } else if (msg.senderId) {
             // Ensure senderId is always string
             msg.senderId = msg.senderId.toString();
+        }
+        if (Array.isArray(msg.attachments)) {
+            msg.attachments = msg.attachments.map(att => {
+                const secureUrl = att?.secureUrl || att?.url;
+                const publicId = att?.publicId || att?.public_id;
+                if (!secureUrl || !publicId) {
+                    return null;
+                }
+                return {
+                    url: secureUrl,
+                    secureUrl,
+                    thumbnailUrl: att?.thumbnailUrl || secureUrl,
+                    publicId,
+                    resourceType: att?.resourceType || att?.resource_type || att?.type || 'image',
+                    format: att?.format || null,
+                    bytes: att?.bytes || att?.size || null,
+                    size: att?.size || att?.bytes || null,
+                    width: att?.width || null,
+                    height: att?.height || null,
+                    originalFilename: att?.originalFilename || att?.original_filename || att?.name || null,
+                    name: att?.name || att?.originalFilename || att?.original_filename || null,
+                    type: att?.type || 'image'
+                };
+            }).filter(Boolean);
+        } else {
+            msg.attachments = [];
         }
         return msg;
     });

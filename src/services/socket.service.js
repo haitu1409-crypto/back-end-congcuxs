@@ -8,6 +8,108 @@ const { verifySocketToken } = require('../middleware/socketAuth.middleware');
 const Message = require('../models/message.model');
 const ChatRoom = require('../models/chatRoom.model');
 const User = require('../models/user.model');
+const { deleteResource, buildImageUrl } = require('../utils/cloudinary');
+
+const CHAT_IMAGE_FOLDER = process.env.CLOUDINARY_CHAT_FOLDER || 'chat_uploads';
+const CHAT_IMAGE_MAX_BYTES = Number(process.env.CHAT_IMAGE_MAX_BYTES) || 6 * 1024 * 1024;
+const MAX_CHAT_IMAGE_ATTACHMENTS = Number(process.env.CHAT_IMAGE_MAX_COUNT) || 4;
+const CHAT_IMAGE_TRANSFORMATION = process.env.CLOUDINARY_CHAT_TRANSFORMATION || 'c_limit,w_1600,h_1600,q_auto,f_auto';
+const CHAT_IMAGE_THUMB_TRANSFORMATION = process.env.CLOUDINARY_CHAT_THUMB_TRANSFORMATION || 'c_limit,w_600,h_600,q_auto,f_auto';
+
+const sanitizeIncomingAttachment = (attachment) => {
+    if (!attachment || typeof attachment !== 'object') {
+        return null;
+    }
+
+    const publicId = attachment.publicId || attachment.public_id;
+    let secureUrl = attachment.secureUrl || attachment.secure_url || attachment.url;
+
+    if (!publicId || !secureUrl) {
+        return null;
+    }
+
+    if (secureUrl.startsWith('http://')) {
+        secureUrl = secureUrl.replace('http://', 'https://');
+    }
+
+    if (CHAT_IMAGE_FOLDER && !publicId.startsWith(`${CHAT_IMAGE_FOLDER}/`)) {
+        return null;
+    }
+
+    const resourceType = attachment.resourceType || attachment.resource_type || 'image';
+
+    const optimizedUrl = buildImageUrl(publicId, {
+        transformation: CHAT_IMAGE_TRANSFORMATION
+    }) || secureUrl;
+
+    const thumbnailUrl = attachment.thumbnailUrl || attachment.thumbnail_url || buildImageUrl(publicId, {
+        transformation: CHAT_IMAGE_THUMB_TRANSFORMATION
+    }) || optimizedUrl;
+
+    const bytes = Number(attachment.bytes || attachment.size);
+    if (Number.isFinite(bytes) && bytes > CHAT_IMAGE_MAX_BYTES) {
+        return null;
+    }
+
+    const width = attachment.width ? Number(attachment.width) : undefined;
+    const height = attachment.height ? Number(attachment.height) : undefined;
+    const originalFilename = attachment.originalFilename || attachment.original_filename || attachment.name || null;
+    const type = attachment.type || 'image';
+
+    return {
+        url: optimizedUrl,
+        secureUrl: optimizedUrl,
+        thumbnailUrl,
+        publicId,
+        resourceType,
+        format: attachment.format || null,
+        bytes: Number.isFinite(bytes) ? bytes : undefined,
+        size: Number.isFinite(bytes) ? bytes : undefined,
+        width: Number.isFinite(width) ? width : undefined,
+        height: Number.isFinite(height) ? height : undefined,
+        originalFilename,
+        name: attachment.name || originalFilename || null,
+        type
+    };
+};
+
+const formatAttachmentForClient = (attachment) => {
+    if (!attachment) {
+        return null;
+    }
+
+    const plain = typeof attachment.toObject === 'function' ? attachment.toObject() : attachment;
+    const secureUrl = plain.secureUrl || plain.url;
+    const publicId = plain.publicId || plain.public_id;
+
+    if (!secureUrl || !publicId) {
+        return null;
+    }
+
+    const optimizedUrl = buildImageUrl(publicId, {
+        transformation: CHAT_IMAGE_TRANSFORMATION
+    }) || secureUrl;
+
+    const thumbnailUrl = plain.thumbnailUrl || buildImageUrl(publicId, {
+        transformation: CHAT_IMAGE_THUMB_TRANSFORMATION
+    }) || optimizedUrl;
+
+    return {
+        url: optimizedUrl,
+        secureUrl: optimizedUrl,
+        thumbnailUrl,
+        publicId,
+        resourceType: plain.resourceType || plain.resource_type || 'image',
+        format: plain.format || null,
+        bytes: plain.bytes || plain.size || null,
+        size: plain.size || plain.bytes || null,
+        width: plain.width || null,
+        height: plain.height || null,
+        originalFilename: plain.originalFilename || plain.original_filename || plain.name || null,
+        name: plain.name || plain.originalFilename || plain.original_filename || null,
+        type: plain.type || 'image'
+    };
+};
 
 let io = null;
 let redisClient = null;
@@ -290,16 +392,51 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
     // Send message
     socket.on('message:send', async (data) => {
         try {
-            const { roomId, content, type = 'text', mentions = [], replyTo = null } = data;
+            const {
+                roomId,
+                content,
+                type = 'text',
+                mentions = [],
+                replyTo = null,
+                attachments = []
+            } = data || {};
 
-            if (!roomId || !content || content.trim().length === 0) {
-                return socket.emit('error', { message: 'Dữ liệu không hợp lệ' });
+            if (!roomId) {
+                return socket.emit('error', { message: 'Thiếu thông tin phòng chat' });
             }
 
-            // 🔥 OPTIMIZE: Cache room data in Redis to reduce DB queries under high load
-            // Check room permission - we still need full Mongoose document for operations
-            // So cache helps but we still need DB query for full document
-            // However, caching reduces lookup time and can help with room validation
+            const trimmedContent = typeof content === 'string' ? content.trim() : '';
+
+            let sanitizedAttachments = [];
+            if (Array.isArray(attachments)) {
+                sanitizedAttachments = attachments
+                    .map(sanitizeIncomingAttachment)
+                    .filter(Boolean);
+            }
+
+            if (attachments && attachments.length > 0 && sanitizedAttachments.length !== attachments.length) {
+                return socket.emit('error', { message: 'Tệp đính kèm không hợp lệ' });
+            }
+
+            if (sanitizedAttachments.length > MAX_CHAT_IMAGE_ATTACHMENTS) {
+                return socket.emit('error', { message: `Chỉ gửi tối đa ${MAX_CHAT_IMAGE_ATTACHMENTS} ảnh mỗi tin nhắn` });
+            }
+
+            let messageType = type || 'text';
+            const hasAttachments = sanitizedAttachments.length > 0;
+
+            if (hasAttachments && messageType === 'text') {
+                messageType = 'image';
+            }
+
+            if ((messageType === 'text' || messageType === 'system') && !trimmedContent) {
+                return socket.emit('error', { message: 'Nội dung không được để trống' });
+            }
+
+            if (messageType === 'image' && !hasAttachments) {
+                return socket.emit('error', { message: 'Ảnh đính kèm không hợp lệ' });
+            }
+
             const room = await ChatRoom.findOne({ roomId });
             
             if (!room) {
@@ -383,6 +520,8 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 }
             }
 
+            const messageContent = trimmedContent || '';
+
             // Create message
             const message = await Message.create({
                 roomId,
@@ -391,8 +530,9 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 senderUsername: user.username,
                 senderDisplayName: user.displayName,
                 senderRole: userRole,
-                content: content.trim(),
-                type,
+                content: messageContent,
+                type: messageType,
+                attachments: sanitizedAttachments,
                 mentions: processedMentions,
                 replyTo: replyToMessage ? replyToMessage._id : null
             });
@@ -403,7 +543,9 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 content: message.content,
                 senderId: message.senderId,
                 senderDisplayName: message.senderDisplayName,
-                createdAt: message.createdAt
+                createdAt: message.createdAt,
+                type: message.type,
+                attachments: sanitizedAttachments
             });
 
             // 🔥 OPTIMIZE: Cache user avatar in Redis to reduce DB queries
@@ -431,6 +573,10 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
             }
 
             // Prepare message data with replyTo info
+            const formattedAttachments = (message.attachments || [])
+                .map(formatAttachmentForClient)
+                .filter(Boolean);
+
             const messageData = {
                 id: message._id.toString(),
                 roomId: message.roomId,
@@ -442,6 +588,7 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 senderAvatar: senderAvatar, // Add avatar to message data
                 content: message.content,
                 type: message.type,
+                attachments: formattedAttachments,
                 createdAt: message.createdAt,
                 isEdited: message.isEdited,
                 readBy: []
@@ -530,7 +677,7 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                         fromAvatar: senderAvatar,
                         roomId: roomId,
                         unreadCount: unreadMessages,
-                        messagePreview: content.trim().substring(0, 50),
+                        messagePreview: (messageContent || (formattedAttachments.length > 0 ? '[Hình ảnh]' : '')).substring(0, 80),
                         timestamp: Date.now()
                     });
                     
@@ -959,6 +1106,36 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 return socket.emit('error', { message: 'Không tìm thấy tin nhắn cần xóa' });
             }
 
+            // Delete attachments on Cloudinary (if any)
+            const attachmentsToDelete = [];
+            messages.forEach(msg => {
+                if (Array.isArray(msg.attachments)) {
+                    msg.attachments.forEach(att => {
+                        const publicId = att?.publicId || att?.public_id;
+                        if (publicId) {
+                            attachmentsToDelete.push({
+                                publicId,
+                                resourceType: att?.resourceType || att?.type || 'image'
+                            });
+                        }
+                    });
+                }
+            });
+
+            if (attachmentsToDelete.length > 0) {
+                await Promise.all(attachmentsToDelete.map(({ publicId, resourceType }) =>
+                    deleteResource(publicId, {
+                        resource_type: resourceType || 'image',
+                        invalidate: true
+                    }).catch(error => {
+                        console.error('Cloudinary delete error:', {
+                            publicId,
+                            error: error.message || error
+                        });
+                    })
+                ));
+            }
+
             // Soft delete all messages
             await Promise.all(
                 messages.map(msg => msg.softDelete())
@@ -1006,6 +1183,26 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 if (messageAge > fiveMinutes) {
                     return socket.emit('error', { message: 'Chỉ có thể xóa tin nhắn trong vòng 5 phút sau khi gửi' });
                 }
+            }
+
+            // Delete attachment on Cloudinary if exists
+            if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+                await Promise.all(message.attachments.map(att => {
+                    const publicId = att?.publicId || att?.public_id;
+                    if (!publicId) {
+                        return Promise.resolve();
+                    }
+                    const resourceType = att?.resourceType || att?.type || 'image';
+                    return deleteResource(publicId, {
+                        resource_type: resourceType,
+                        invalidate: true
+                    }).catch(error => {
+                        console.error('Cloudinary delete error:', {
+                            publicId,
+                            error: error.message || error
+                        });
+                    });
+                }));
             }
 
             // Soft delete message

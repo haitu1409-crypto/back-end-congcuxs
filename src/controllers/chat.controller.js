@@ -3,10 +3,214 @@
  * Tối ưu với caching và pagination
  */
 
+const multer = require('multer');
 const Message = require('../models/message.model');
 const ChatRoom = require('../models/chatRoom.model');
 const User = require('../models/user.model');
 const { getIO, getRedisClient } = require('../services/socket.service');
+const { cloudinary, uploadBuffer, deleteResource, buildImageUrl } = require('../utils/cloudinary');
+
+const CHAT_IMAGE_MAX_BYTES = Number(process.env.CHAT_IMAGE_MAX_BYTES) || 6 * 1024 * 1024; // 6MB default
+const MAX_CHAT_IMAGE_ATTACHMENTS = Number(process.env.CHAT_IMAGE_MAX_COUNT) || 4;
+const CHAT_IMAGE_ALLOWED_MIME = new Set([
+    'image/jpeg',
+    'image/png',
+    'image/gif',
+    'image/webp',
+    'image/heic',
+    'image/heif'
+]);
+const CHAT_IMAGE_FOLDER = process.env.CLOUDINARY_CHAT_FOLDER || 'chat_uploads';
+const CHAT_IMAGE_TRANSFORMATION = process.env.CLOUDINARY_CHAT_TRANSFORMATION || 'c_limit,w_1600,h_1600,q_auto,f_auto';
+const CHAT_IMAGE_THUMB_TRANSFORMATION = process.env.CLOUDINARY_CHAT_THUMB_TRANSFORMATION || 'c_limit,w_600,h_600,q_auto,f_auto';
+
+const chatImageUpload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+        fileSize: CHAT_IMAGE_MAX_BYTES
+    },
+    fileFilter: (req, file, cb) => {
+        if (CHAT_IMAGE_ALLOWED_MIME.has(file.mimetype)) {
+            return cb(null, true);
+        }
+        const error = new Error('Chỉ cho phép upload ảnh (JPG, PNG, GIF, WebP, HEIC/HEIF)');
+        error.code = 'UNSUPPORTED_FILE_TYPE';
+        return cb(error);
+    }
+});
+
+const buildAttachmentPayload = (cloudinaryResult) => {
+    if (!cloudinaryResult) {
+        return null;
+    }
+
+    const optimizedUrl = buildImageUrl(cloudinaryResult.public_id, {
+        transformation: CHAT_IMAGE_TRANSFORMATION
+    });
+
+    const thumbnailUrl = buildImageUrl(cloudinaryResult.public_id, {
+        transformation: CHAT_IMAGE_THUMB_TRANSFORMATION
+    });
+
+    return {
+        url: optimizedUrl || cloudinaryResult.secure_url,
+        secureUrl: optimizedUrl || cloudinaryResult.secure_url,
+        thumbnailUrl,
+        publicId: cloudinaryResult.public_id,
+        resourceType: cloudinaryResult.resource_type,
+        format: cloudinaryResult.format,
+        bytes: cloudinaryResult.bytes,
+        width: cloudinaryResult.width,
+        height: cloudinaryResult.height,
+        originalFilename: cloudinaryResult.original_filename,
+        createdAt: cloudinaryResult.created_at
+    };
+};
+
+const chatImageUploadSingle = chatImageUpload.single('image');
+
+exports.getChatUploadSignature = async (req, res) => {
+    try {
+        const timestamp = Math.round(Date.now() / 1000);
+        const folder = CHAT_IMAGE_FOLDER;
+        const userId = req.userId || 'guest';
+        const publicId = req.query.publicId || `chat_${userId}_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+
+        const paramsToSign = {
+            timestamp,
+            folder,
+            public_id: publicId,
+            resource_type: 'image',
+            transformation: CHAT_IMAGE_TRANSFORMATION
+        };
+
+        const signature = cloudinary.utils.api_sign_request(
+            paramsToSign,
+            process.env.CLOUDINARY_API_SECRET
+        );
+
+        const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
+        const apiKey = process.env.CLOUDINARY_API_KEY;
+
+        if (!cloudName || !apiKey) {
+            throw new Error('Cloudinary configuration thiếu thông tin cloud name hoặc api key');
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                timestamp,
+                signature,
+                publicId,
+                folder,
+                cloudName,
+                apiKey,
+                uploadUrl: `https://api.cloudinary.com/v1_1/${cloudName}/image/upload`,
+                maxBytes: CHAT_IMAGE_MAX_BYTES
+            }
+        });
+    } catch (error) {
+        console.error('Get chat upload signature error:', error);
+        return res.status(500).json({
+            success: false,
+            message: 'Không thể tạo chữ ký upload',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+exports.chatImageUploadMiddleware = (req, res, next) => {
+    chatImageUploadSingle(req, res, (err) => {
+        if (!err) {
+            return next();
+        }
+
+        let status = 400;
+        let message = 'Lỗi khi upload ảnh';
+
+        if (err instanceof multer.MulterError) {
+            if (err.code === 'LIMIT_FILE_SIZE') {
+                message = `Ảnh vượt quá giới hạn ${Math.round(CHAT_IMAGE_MAX_BYTES / (1024 * 1024))}MB`;
+            } else {
+                message = err.message || message;
+            }
+        } else if (err.code === 'UNSUPPORTED_FILE_TYPE') {
+            message = err.message;
+        } else {
+            status = err.statusCode || 500;
+            message = err.message || message;
+        }
+
+        return res.status(status).json({
+            success: false,
+            message
+        });
+    });
+};
+
+exports.uploadChatImage = async (req, res) => {
+    try {
+        if (!req.file || !req.file.buffer) {
+            return res.status(400).json({
+                success: false,
+                message: 'Không tìm thấy file ảnh để upload'
+            });
+        }
+
+        const uniqueSuffix = `${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+        const publicId = `chat_${req.userId || 'user'}_${uniqueSuffix}`;
+
+        const uploadResult = await uploadBuffer(req.file.buffer, {
+            folder: CHAT_IMAGE_FOLDER,
+            resource_type: 'image',
+            public_id: publicId,
+            overwrite: false,
+            transformation: [{ raw_transformation: CHAT_IMAGE_TRANSFORMATION }]
+        });
+
+        const attachment = buildAttachmentPayload(uploadResult);
+
+        if (!attachment) {
+            return res.status(500).json({
+                success: false,
+                message: 'Không thể xử lý dữ liệu ảnh sau khi upload'
+            });
+        }
+
+        return res.json({
+            success: true,
+            data: {
+                attachment,
+                messageType: 'image',
+                maxAttachments: MAX_CHAT_IMAGE_ATTACHMENTS
+            }
+        });
+    } catch (error) {
+        console.error('Upload chat image error:', error);
+        let status = 500;
+        let message = 'Lỗi server khi upload ảnh chat';
+
+        if (error instanceof multer.MulterError) {
+            status = 400;
+            if (error.code === 'LIMIT_FILE_SIZE') {
+                message = `Ảnh vượt quá giới hạn ${Math.round(CHAT_IMAGE_MAX_BYTES / (1024 * 1024))}MB`;
+            } else {
+                message = error.message;
+            }
+        } else if (error.code === 'UNSUPPORTED_FILE_TYPE') {
+            status = 400;
+            message = error.message;
+        } else if (error.http_code) {
+            status = error.http_code;
+            message = error.message || message;
+        }
+
+        return res.status(status).json({
+            success: false,
+            message
+        });
+    }
+};
 
 // Verify chat access code
 exports.verifyChatCode = async (req, res) => {
@@ -667,6 +871,35 @@ exports.deleteMessages = async (req, res) => {
             });
         }
 
+        // Delete attachments on Cloudinary if present
+        const attachmentsToDelete = [];
+        messages.forEach(msg => {
+            if (Array.isArray(msg.attachments)) {
+                msg.attachments.forEach(att => {
+                    if (att && (att.publicId || att.public_id)) {
+                        attachmentsToDelete.push({
+                            publicId: att.publicId || att.public_id,
+                            resourceType: att.resourceType || att.type || 'image'
+                        });
+                    }
+                });
+            }
+        });
+
+        if (attachmentsToDelete.length > 0) {
+            await Promise.all(attachmentsToDelete.map(({ publicId, resourceType }) =>
+                deleteResource(publicId, {
+                    resource_type: resourceType || 'image',
+                    invalidate: true
+                }).catch(error => {
+                    console.error('Cloudinary delete error:', {
+                        publicId,
+                        error: error.message || error
+                    });
+                })
+            ));
+        }
+
         // Soft delete all messages
         await Promise.all(
             messages.map(msg => msg.softDelete())
@@ -727,6 +960,28 @@ exports.deleteMessage = async (req, res) => {
                     message: 'Chỉ có thể xóa tin nhắn trong vòng 5 phút sau khi gửi'
                 });
             }
+        }
+
+        // Delete attachment on Cloudinary if present
+        if (Array.isArray(message.attachments) && message.attachments.length > 0) {
+            await Promise.all(message.attachments.map(att => {
+                const publicId = att?.publicId || att?.public_id;
+                if (!publicId) {
+                    return Promise.resolve();
+                }
+
+                const resourceType = att?.resourceType || att?.type || 'image';
+
+                return deleteResource(publicId, {
+                    resource_type: resourceType,
+                    invalidate: true
+                }).catch(error => {
+                    console.error('Cloudinary delete error:', {
+                        publicId,
+                        error: error.message || error
+                    });
+                });
+            }));
         }
 
         // Soft delete message
