@@ -25,11 +25,32 @@ const userSchema = new mongoose.Schema({
         minlength: [2, 'Tên người dùng phải có ít nhất 2 ký tự'],
         maxlength: [50, 'Tên người dùng không được vượt quá 50 ký tự']
     },
+    email: {
+        type: String,
+        trim: true,
+        lowercase: true,
+        unique: true,
+        sparse: true,
+        match: [/^[\w-.]+@([\w-]+\.)+[\w-]{2,}$/i, 'Email không hợp lệ']
+    },
     password: {
         type: String,
-        required: [true, 'Mật khẩu là bắt buộc'],
+        required: function () {
+            return this.provider === 'local';
+        },
         minlength: [6, 'Mật khẩu phải có ít nhất 6 ký tự'],
         select: false // Không trả về password khi query
+    },
+    provider: {
+        type: String,
+        enum: ['local', 'facebook'],
+        default: 'local',
+        index: true
+    },
+    facebookId: {
+        type: String,
+        unique: true,
+        sparse: true
     },
     role: {
         type: String,
@@ -87,6 +108,8 @@ const userSchema = new mongoose.Schema({
 
 // Indexes for performance
 userSchema.index({ username: 1 });
+userSchema.index({ email: 1 });
+userSchema.index({ facebookId: 1 });
 userSchema.index({ role: 1, isActive: 1 });
 userSchema.index({ socketId: 1 });
 userSchema.index({ createdAt: -1 });
@@ -94,7 +117,7 @@ userSchema.index({ createdAt: -1 });
 // Pre-save middleware: Hash password
 userSchema.pre('save', async function (next) {
     // Chỉ hash password khi password mới hoặc được thay đổi
-    if (!this.isModified('password')) {
+    if (!this.isModified('password') || !this.password) {
         return next();
     }
 
@@ -111,6 +134,9 @@ userSchema.pre('save', async function (next) {
 // Instance method: Compare password
 userSchema.methods.comparePassword = async function (candidatePassword) {
     try {
+        if (!this.password) {
+            return false;
+        }
         return await bcrypt.compare(candidatePassword, this.password);
     } catch (error) {
         throw error;

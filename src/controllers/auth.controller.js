@@ -5,6 +5,8 @@
 
 const User = require('../models/user.model');
 const jwt = require('jsonwebtoken');
+const axios = require('axios');
+const crypto = require('crypto');
 const { validationResult } = require('express-validator');
 
 // Generate JWT token
@@ -12,8 +14,77 @@ const generateToken = (userId, role) => {
     return jwt.sign(
         { userId, role },
         process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-        { expiresIn: '7d' }
+        { expiresIn: '10d' }
     );
+};
+
+const buildSafeUserResponse = (user) => ({
+    id: user._id,
+    username: user.username,
+    displayName: user.displayName,
+    role: user.role,
+    avatar: user.avatar,
+    email: user.email,
+    provider: user.provider
+});
+
+const encodeState = (payload) => {
+    try {
+        return Buffer.from(JSON.stringify(payload)).toString('base64url');
+    } catch (error) {
+        console.error('Failed to encode state payload:', error);
+        return crypto.randomBytes(12).toString('hex');
+    }
+};
+
+const decodeState = (stateValue) => {
+    if (!stateValue) return {};
+    try {
+        const json = Buffer.from(stateValue, 'base64url').toString('utf8');
+        const data = JSON.parse(json);
+        if (typeof data === 'object' && data !== null) {
+            return data;
+        }
+    } catch (error) {
+        console.warn('Failed to decode state payload, returning raw state:', error.message);
+        return { originalState: stateValue };
+    }
+    return {};
+};
+
+const sanitizeUsername = (value) => {
+    const base = value
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[^a-z0-9_]+/g, '_')
+        .replace(/_{2,}/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 20);
+    if (base.length >= 3) return base;
+    return `fb_${crypto.randomBytes(3).toString('hex')}`;
+};
+
+const generateUniqueUsername = async (preferred) => {
+    let username = sanitizeUsername(preferred);
+    if (!username || username.length < 3) {
+        username = `fb_${crypto.randomBytes(3).toString('hex')}`;
+    }
+
+    let attempt = 0;
+    let candidate = username;
+
+    while (await User.exists({ username: candidate })) {
+        attempt += 1;
+        const suffix = attempt.toString();
+        const trimmedBase = username.slice(0, Math.max(3, 30 - suffix.length - 1));
+        candidate = `${trimmedBase}_${suffix}`;
+        if (attempt > 50) {
+            candidate = `fb_${crypto.randomBytes(4).toString('hex')}`;
+            break;
+        }
+    }
+
+    return candidate;
 };
 
 // Register new user
@@ -64,13 +135,7 @@ exports.register = async (req, res) => {
             success: true,
             message: 'Đăng ký thành công',
             data: {
-                user: {
-                    id: user._id,
-                    username: user.username,
-                    displayName: user.displayName,
-                    role: user.role,
-                    avatar: user.avatar
-                },
+                user: buildSafeUserResponse(user),
                 token
             }
         });
@@ -134,11 +199,7 @@ exports.login = async (req, res) => {
             message: 'Đăng nhập thành công',
             data: {
                 user: {
-                    id: user._id,
-                    username: user.username,
-                    displayName: user.displayName,
-                    role: user.role,
-                    avatar: user.avatar,
+                    ...buildSafeUserResponse(user),
                     isAdmin: user.role === 'admin'
                 },
                 token
@@ -170,11 +231,7 @@ exports.getMe = async (req, res) => {
             success: true,
             data: {
                 user: {
-                    id: user._id,
-                    username: user.username,
-                    displayName: user.displayName,
-                    role: user.role,
-                    avatar: user.avatar,
+                    ...buildSafeUserResponse(user),
                     isAdmin: user.role === 'admin',
                     lastLogin: user.lastLogin,
                     lastSeen: user.lastSeen
@@ -236,13 +293,7 @@ exports.updateProfile = async (req, res) => {
             success: true,
             message: 'Cập nhật thông tin thành công',
             data: {
-                user: {
-                    id: user._id,
-                    username: user.username,
-                    displayName: user.displayName,
-                    role: user.role,
-                    avatar: user.avatar
-                }
+                user: buildSafeUserResponse(user)
             }
         });
     } catch (error) {
@@ -301,13 +352,7 @@ exports.uploadAvatar = async (req, res) => {
             message: 'Upload avatar thành công',
             data: {
                 url: avatarUrl,
-                user: {
-                    id: user._id,
-                    username: user.username,
-                    displayName: user.displayName,
-                    role: user.role,
-                    avatar: user.avatar
-                }
+                user: buildSafeUserResponse(user)
             }
         });
     } catch (error) {
@@ -318,5 +363,192 @@ exports.uploadAvatar = async (req, res) => {
             error: process.env.NODE_ENV === 'development' ? error.message : undefined
         });
     }
+};
+
+// Start Facebook OAuth flow
+exports.facebookLogin = async (req, res) => {
+    try {
+        const clientId = process.env.FACEBOOK_APP_ID;
+        const defaultRedirectUri = process.env.FACEBOOK_REDIRECT_URI;
+
+        if (!clientId || !defaultRedirectUri) {
+            return res.status(500).json({
+                success: false,
+                message: 'Facebook OAuth chưa được cấu hình'
+            });
+        }
+
+        const redirectUri = defaultRedirectUri;
+        const statePayload = {
+            nonce: crypto.randomBytes(8).toString('hex')
+        };
+
+        if (req.query.success_redirect) {
+            statePayload.successRedirect = req.query.success_redirect;
+        }
+
+        if (req.query.state) {
+            statePayload.originalState = req.query.state;
+        }
+
+        const encodedState = encodeState(statePayload);
+
+        const authUrl = new URL('https://www.facebook.com/v19.0/dialog/oauth');
+        authUrl.searchParams.set('client_id', clientId);
+        authUrl.searchParams.set('redirect_uri', redirectUri);
+        authUrl.searchParams.set('response_type', 'code');
+        authUrl.searchParams.set('scope', process.env.FACEBOOK_PERMISSIONS || 'email,public_profile');
+        authUrl.searchParams.set('state', encodedState);
+
+        return res.redirect(authUrl.toString());
+    } catch (error) {
+        console.error('Facebook login redirect error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Không thể chuyển hướng tới Facebook'
+        });
+    }
+};
+
+// Handle Facebook OAuth callback
+exports.facebookCallback = async (req, res) => {
+    const {
+        code,
+        state,
+        error: fbError,
+        error_description: errorDescription
+    } = req.query;
+
+    if (fbError) {
+        console.error('Facebook returned error:', fbError, errorDescription);
+        const stateData = decodeState(state);
+        return redirectToError(res, stateData, fbError);
+    }
+
+    if (!code) {
+        const stateData = decodeState(state);
+        return redirectToError(res, stateData, 'missing_code');
+    }
+
+    try {
+        const clientId = process.env.FACEBOOK_APP_ID;
+        const clientSecret = process.env.FACEBOOK_APP_SECRET;
+        const redirectUri = process.env.FACEBOOK_REDIRECT_URI;
+
+        if (!clientId || !clientSecret || !redirectUri) {
+            throw new Error('Facebook OAuth chưa được cấu hình đầy đủ');
+        }
+
+        // Exchange code for access token
+        const tokenResponse = await axios.get('https://graph.facebook.com/v19.0/oauth/access_token', {
+            params: {
+                client_id: clientId,
+                client_secret: clientSecret,
+                redirect_uri: redirectUri,
+                code
+            }
+        });
+
+        const accessToken = tokenResponse.data.access_token;
+
+        if (!accessToken) {
+            throw new Error('Không nhận được access token từ Facebook');
+        }
+
+        // Fetch user profile
+        const profileResponse = await axios.get('https://graph.facebook.com/me', {
+            params: {
+                fields: 'id,name,email,picture.width(512),first_name,last_name',
+                access_token: accessToken
+            }
+        });
+
+        const profile = profileResponse.data;
+
+        if (!profile?.id) {
+            throw new Error('Không lấy được thông tin người dùng từ Facebook');
+        }
+
+        let user = await User.findOne({ facebookId: profile.id });
+
+        if (!user && profile.email) {
+            user = await User.findOne({ email: profile.email.toLowerCase() });
+        }
+
+        const avatarUrl = profile.picture?.data?.url || null;
+
+        if (!user) {
+            const username = await generateUniqueUsername(profile.email || profile.name || profile.id);
+            const displayName = profile.name || `${profile.first_name || ''} ${profile.last_name || ''}`.trim() || 'Facebook User';
+
+            user = await User.create({
+                username,
+                displayName,
+                email: profile.email ? profile.email.toLowerCase() : undefined,
+                provider: 'facebook',
+                facebookId: profile.id,
+                avatar: avatarUrl,
+                password: crypto.randomBytes(16).toString('hex')
+            });
+        } else {
+            user.facebookId = user.facebookId || profile.id;
+            user.provider = user.provider || 'facebook';
+            if (profile.email && !user.email) {
+                user.email = profile.email.toLowerCase();
+            }
+            if (avatarUrl && user.avatar !== avatarUrl) {
+                user.avatar = avatarUrl;
+            }
+            if (!user.displayName && profile.name) {
+                user.displayName = profile.name;
+            }
+            await user.save({ validateBeforeSave: false });
+        }
+
+        user.lastLogin = new Date();
+        await user.save({ validateBeforeSave: false });
+
+        const token = generateToken(user._id, user.role);
+
+        const stateData = decodeState(state);
+        const successRedirect = buildSuccessRedirect(token, user, {
+            successRedirect: stateData.successRedirect,
+            state: stateData.originalState
+        });
+        return res.redirect(successRedirect);
+    } catch (error) {
+        console.error('Facebook callback error:', error.message, error.stack);
+        const stateData = decodeState(state);
+        return redirectToError(res, stateData, 'callback_failed');
+    }
+};
+
+const buildSuccessRedirect = (token, user, options = {}) => {
+    const redirectUri = options.successRedirect || process.env.FACEBOOK_SUCCESS_REDIRECT || `${process.env.FRONTEND_URL || ''}/auth/facebook/callback`;
+    const url = new URL(redirectUri);
+
+    const safeUser = buildSafeUserResponse(user);
+    const encodedUser = Buffer.from(JSON.stringify(safeUser)).toString('base64url');
+
+    url.searchParams.set('token', token);
+    url.searchParams.set('user', encodedUser);
+    url.searchParams.set('provider', 'facebook');
+    if (options.state) {
+        url.searchParams.set('state', options.state);
+    }
+
+    return url.toString();
+};
+
+const redirectToError = (res, stateData = {}, errorCode) => {
+    const redirectUri = stateData.successRedirect || process.env.FACEBOOK_ERROR_REDIRECT || process.env.FACEBOOK_SUCCESS_REDIRECT || process.env.FRONTEND_URL || '/';
+    const url = new URL(redirectUri);
+
+    url.searchParams.set('error', errorCode);
+    if (stateData.originalState) {
+        url.searchParams.set('state', stateData.originalState);
+    }
+
+    return res.redirect(url.toString());
 };
 

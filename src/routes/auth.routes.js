@@ -11,7 +11,9 @@ const {
     getMe,
     logout,
     updateProfile,
-    uploadAvatar
+    uploadAvatar,
+    facebookLogin,
+    facebookCallback
 } = require('../controllers/auth.controller');
 const { verifyToken } = require('../middleware/auth.middleware');
 const multer = require('multer');
@@ -101,6 +103,9 @@ router.post('/login',
     loginValidation,
     login
 );
+
+router.get('/facebook', facebookLogin);
+router.get('/facebook/callback', facebookCallback);
 
 // Configure multer for avatar upload
 const upload = multer({
