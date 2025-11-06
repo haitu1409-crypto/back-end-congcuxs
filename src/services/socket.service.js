@@ -398,7 +398,8 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 type = 'text',
                 mentions = [],
                 replyTo = null,
-                attachments = []
+                attachments = [],
+                clientMessageId: incomingClientMessageId = null
             } = data || {};
 
             if (!roomId) {
@@ -406,6 +407,7 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
             }
 
             const trimmedContent = typeof content === 'string' ? content.trim() : '';
+            const clientMessageId = incomingClientMessageId || null;
 
             let sanitizedAttachments = [];
             if (Array.isArray(attachments)) {
@@ -591,7 +593,8 @@ const setupSocketEvents = (socket, userId, userRole, user) => {
                 attachments: formattedAttachments,
                 createdAt: message.createdAt,
                 isEdited: message.isEdited,
-                readBy: []
+                readBy: [],
+                clientMessageId: clientMessageId || undefined
             };
 
             // Add replyTo info if exists
