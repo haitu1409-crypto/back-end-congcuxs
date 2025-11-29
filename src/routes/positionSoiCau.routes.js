@@ -9,7 +9,9 @@ const rateLimit = require('express-rate-limit');
 const {
     getPositionSoiCau,
     getPositionSoiCauRange,
-    getPositionPatternStats
+    getPositionPatternStats,
+    getPositionSoiCauHistory,
+    checkAndUpdatePositionSoiCau
 } = require('../controllers/positionSoiCau.controller');
 
 // Rate limiter cho position soi cau
@@ -67,6 +69,27 @@ router.get('/stats', statsLimiter, async (req, res) => {
 });
 
 /**
+ * @route GET /api/position-soicau/history
+ * @desc Lấy lịch sử dự đoán soi cầu vị trí
+ * @query {number} limit - Số bản ghi (1-100, default: 30)
+ * @query {number} days - Số ngày phân tích (2-30, default: 2)
+ * @access Public
+ */
+router.get('/history', positionSoiCauLimiter, async (req, res) => {
+    await getPositionSoiCauHistory(req, res);
+});
+
+/**
+ * @route POST /api/position-soicau/check-update
+ * @desc Kiểm tra và cập nhật soi cầu vị trí (special)
+ * @query {number} days - Số ngày phân tích (2-30, default: 2)
+ * @access Public
+ */
+router.post('/check-update', positionSoiCauLimiter, async (req, res) => {
+    await checkAndUpdatePositionSoiCau(req, res);
+});
+
+/**
  * @route GET /api/position-soicau/health
  * @desc Health check endpoint
  * @access Public
@@ -80,7 +103,9 @@ router.get('/health', (req, res) => {
         endpoints: {
             main: '/api/position-soicau',
             range: '/api/position-soicau/range',
-            stats: '/api/position-soicau/stats'
+            stats: '/api/position-soicau/stats',
+            history: '/api/position-soicau/history',
+            checkUpdate: '/api/position-soicau/check-update'
         }
     });
 });

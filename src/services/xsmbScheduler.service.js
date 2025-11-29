@@ -16,18 +16,30 @@ class XSMBSchedulerService {
     init() {
         console.log('🕐 Khởi tạo XSMB Scheduler...');
 
-        // Lên lịch chạy hàng ngày lúc 18:35
-        this.scheduledJob = cron.schedule('35 18 * * *', async () => {
+        // Lấy thời gian từ env hoặc dùng mặc định 18:35
+        const scraperHour = parseInt(process.env.XSMB_SCRAPER_HOUR) || 18;
+        const scraperMinute = parseInt(process.env.XSMB_SCRAPER_MINUTE) || 35;
+        const timezone = process.env.XSMB_SCRAPER_TIMEZONE || 'Asia/Ho_Chi_Minh';
+
+        // Lưu config để dùng ở các method khác
+        this.scraperHour = scraperHour;
+        this.scraperMinute = scraperMinute;
+        this.timezone = timezone;
+
+        // Lên lịch chạy hàng ngày
+        const cronExpression = `${scraperMinute} ${scraperHour} * * *`;
+        this.scheduledJob = cron.schedule(cronExpression, async () => {
             await this.runDailyScraping();
         }, {
             scheduled: true,
-            timezone: 'Asia/Ho_Chi_Minh'
+            timezone: timezone
         });
 
         // Tính toán thời gian chạy tiếp theo
         this.calculateNextRun();
 
         console.log('✅ XSMB Scheduler đã được khởi tạo');
+        console.log(`⏰ Thời gian chạy: ${scraperHour}:${String(scraperMinute).padStart(2, '0')} (${timezone})`);
         console.log(`⏰ Thời gian chạy tiếp theo: ${this.nextRun}`);
 
         return this;
@@ -39,15 +51,19 @@ class XSMBSchedulerService {
     calculateNextRun() {
         const now = new Date();
         const nextRun = new Date();
-        nextRun.setHours(18, 35, 0, 0);
+        const hour = this.scraperHour || parseInt(process.env.XSMB_SCRAPER_HOUR) || 18;
+        const minute = this.scraperMinute || parseInt(process.env.XSMB_SCRAPER_MINUTE) || 35;
+        const timezone = this.timezone || process.env.XSMB_SCRAPER_TIMEZONE || 'Asia/Ho_Chi_Minh';
 
-        // Nếu đã qua 18:35 hôm nay, lên lịch cho ngày mai
+        nextRun.setHours(hour, minute, 0, 0);
+
+        // Nếu đã qua thời gian hôm nay, lên lịch cho ngày mai
         if (now > nextRun) {
             nextRun.setDate(nextRun.getDate() + 1);
         }
 
         this.nextRun = nextRun.toLocaleString('vi-VN', {
-            timeZone: 'Asia/Ho_Chi_Minh',
+            timeZone: timezone,
             year: 'numeric',
             month: '2-digit',
             day: '2-digit',
@@ -154,12 +170,17 @@ class XSMBSchedulerService {
      * Lấy trạng thái scheduler
      */
     getStatus() {
+        const hour = this.scraperHour || parseInt(process.env.XSMB_SCRAPER_HOUR) || 18;
+        const minute = this.scraperMinute || parseInt(process.env.XSMB_SCRAPER_MINUTE) || 35;
+        const timezone = this.timezone || process.env.XSMB_SCRAPER_TIMEZONE || 'Asia/Ho_Chi_Minh';
+
         return {
             isRunning: this.isRunning,
             isScheduled: this.scheduledJob ? this.scheduledJob.running : false,
             lastRun: this.lastRun,
             nextRun: this.nextRun,
-            timezone: 'Asia/Ho_Chi_Minh'
+            scheduledTime: `${hour}:${String(minute).padStart(2, '0')}`,
+            timezone: timezone
         };
     }
 
@@ -170,9 +191,11 @@ class XSMBSchedulerService {
         const now = new Date();
         const currentHour = now.getHours();
         const currentMinute = now.getMinutes();
+        const hour = this.scraperHour || parseInt(process.env.XSMB_SCRAPER_HOUR) || 18;
+        const minute = this.scraperMinute || parseInt(process.env.XSMB_SCRAPER_MINUTE) || 35;
 
-        // Chạy từ 18:35 đến 19:00
-        return currentHour === 18 && currentMinute >= 35 && currentMinute <= 59;
+        // Chạy trong khoảng thời gian scraper (từ giờ:phút đến giờ:59)
+        return currentHour === hour && currentMinute >= minute && currentMinute <= 59;
     }
 
     /**

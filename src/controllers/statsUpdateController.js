@@ -12,6 +12,7 @@ const {
     calculateTanSuatLotoStats,
     calculateTanSuatLoCapStats
 } = require('./xsmbController');
+const { calculateAndSaveSpecialDetailedStats } = require('../services/specialDetailedStats.service');
 
 /**
  * Cập nhật thống kê Lô Gan
@@ -87,6 +88,15 @@ const updateGiaiDacBietStats = async (req, res) => {
             },
             { upsert: true, new: true }
         );
+
+        // Tự động tính toán và lưu thống kê chi tiết (gan theo bộ, tổng, chạm, đầu đuôi)
+        try {
+            await calculateAndSaveSpecialDetailedStats(days);
+            console.log(`✅ Đã tính toán và lưu thống kê chi tiết cho ${days} ngày`);
+        } catch (detailedError) {
+            console.warn(`⚠️ Không thể tính toán thống kê chi tiết: ${detailedError.message}`);
+            // Không throw error, chỉ log warning vì thống kê chính đã được lưu
+        }
 
         console.log(`✅ Đã cập nhật thống kê Giải Đặc Biệt cho ${days} ngày`);
 

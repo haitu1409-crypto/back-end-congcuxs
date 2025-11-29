@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { getLoGanStats, getSpecialPrizeStats, getDauDuoiStats, getDauDuoiStatsByDate, getSpecialPrizeStatsByWeek, getTanSuatLotoStats, getTanSuatLoCapStats } = require('../controllers/xsmbController');
+const { getLoGanStats, getSpecialPrizeStats, getDauDuoiStats, getDauDuoiStatsByDate, getSpecialPrizeStatsByWeek, getTanSuatLotoStats, getTanSuatLoCapStats, getSpecialDetailedStats } = require('../controllers/xsmbController');
 const rateLimit = require('express-rate-limit');
 
 // Rate limiter
@@ -50,6 +50,11 @@ router.get('/xsmb/statistics/tan-suat-loto', statsLimiter, async (req, res) => {
 // Thống kê Tần Suất Lô Cặp
 router.get('/xsmb/statistics/tan-suat-lo-cap', statsLimiter, async (req, res) => {
     await getTanSuatLoCapStats(req, res);
+});
+
+// Thống kê chi tiết Giải Đặc Biệt (gan theo bộ, tổng, chạm, đầu đuôi)
+router.get('/xsmb/statistics/special-detailed', statsLimiter, async (req, res) => {
+    await getSpecialDetailedStats(req, res);
 });
 
 module.exports = router;

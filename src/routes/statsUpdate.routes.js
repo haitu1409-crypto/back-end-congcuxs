@@ -8,6 +8,7 @@ const {
     updateTanSuatLotoStats,
     updateTanSuatLoCapStats
 } = require('../controllers/statsUpdateController');
+const { calculateAndSaveSpecialDetailedStats } = require('../services/specialDetailedStats.service');
 const rateLimit = require('express-rate-limit');
 
 // Rate limiter cho các endpoint cập nhật
@@ -38,7 +39,48 @@ router.put('/xsmb/statistics/tan-suat-loto', updateLimiter, updateTanSuatLotoSta
 // Route cập nhật thống kê Tần Suất Lô Cặp
 router.put('/xsmb/statistics/tan-suat-lo-cap', updateLimiter, updateTanSuatLoCapStats);
 
+// Route cập nhật thống kê chi tiết Giải Đặc Biệt
+router.put('/xsmb/statistics/special-detailed', updateLimiter, async (req, res) => {
+    try {
+        const { days } = req.query;
+        if (!days) {
+            return res.status(400).json({ error: 'Tham số days là bắt buộc' });
+        }
+        console.log(`🔄 Cập nhật thống kê chi tiết cho ${days} ngày...`);
+        const result = await calculateAndSaveSpecialDetailedStats(Number(days));
+        console.log(`✅ Đã cập nhật thống kê chi tiết cho ${days} ngày`);
+        res.status(200).json({
+            success: true,
+            message: `Đã cập nhật thống kê chi tiết cho ${days} ngày`,
+            data: result
+        });
+    } catch (error) {
+        console.error('❌ Lỗi khi cập nhật thống kê chi tiết:', error);
+        res.status(500).json({ error: error.message });
+    }
+});
+
 module.exports = router;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 

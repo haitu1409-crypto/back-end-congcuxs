@@ -70,10 +70,10 @@ const generateDanDe = async (req, res) => {
                 });
             }
 
-            if (combinationNumbers.length > 40) {
+            if (combinationNumbers.length > 100) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Thêm số mong muốn không được quá 40 số'
+                    message: 'Thêm số mong muốn không được quá 100 số'
                 });
             }
 
@@ -115,10 +115,10 @@ const generateDanDe = async (req, res) => {
                 });
             }
 
-            if (excludeNumbers.length > 10) {
+            if (excludeNumbers.length > 20) {
                 return res.status(400).json({
                     success: false,
-                    message: 'Loại bỏ số mong muốn không được quá 10 số'
+                    message: 'Loại bỏ số mong muốn không được quá 20 số'
                 });
             }
         }

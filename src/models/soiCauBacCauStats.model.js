@@ -9,7 +9,7 @@ const soiCauBacCauStatsSchema = new mongoose.Schema({
     days: {
         type: Number,
         required: true,
-        enum: [90, 120, 150, 180], // Số ngày cố định
+        enum: [90, 120, 150, 180, 240, 270, 300, 365], // Số ngày cố định
         default: 90
     },
     // Thống kê theo từng ngày với định vị chính xác
@@ -163,6 +163,11 @@ const soiCauBacCauStatsSchema = new mongoose.Schema({
         endDate: { type: String },
         totalDays: { type: Number },
         totalCells: { type: Number }, // Tổng số ô trong bảng
+        requestedDays: { type: Number },
+        availableDays: { type: Number },
+        coverageStatus: { type: String, enum: ['full', 'partial'], default: 'full' },
+        coverageMessage: { type: String },
+        message: { type: String },
         lastUpdated: { type: Date, default: Date.now }
     },
     lastUpdated: { type: Date, default: Date.now }
@@ -178,24 +183,25 @@ const soiCauBacCauStatsSchema = new mongoose.Schema({
 
 // Static method để tìm theo số ngày
 soiCauBacCauStatsSchema.statics.findByDays = function (days) {
-    return this.findOne({ days }).sort({ lastUpdated: -1 });
+    return this.findOne({ days }).sort({ lastUpdated: -1 }).lean();
 };
 
 // Static method để tạo hoặc cập nhật
 soiCauBacCauStatsSchema.statics.createOrUpdate = async function (days, data) {
-    const existing = await this.findOne({ days });
-    if (existing) {
-        existing.statistics = data.statistics;
-        existing.metadata = data.metadata;
-        existing.lastUpdated = new Date();
-        return existing.save();
-    } else {
-        return this.create({
-            days,
-            statistics: data.statistics,
-            metadata: data.metadata
-        });
-    }
+    const payload = {
+        days,
+        statistics: data.statistics,
+        metadata: data.metadata,
+        lastUpdated: new Date()
+    };
+
+    const result = await this.findOneAndUpdate(
+        { days },
+        { $set: payload },
+        { upsert: true, new: true, setDefaultsOnInsert: true }
+    );
+
+    return result.toObject();
 };
 
 module.exports = mongoose.model('SoiCauBacCauStats', soiCauBacCauStatsSchema);

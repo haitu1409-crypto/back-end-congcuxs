@@ -33,7 +33,7 @@ const updateLimiter = rateLimit({
 /**
  * @route GET /api/soicau-bac-cau
  * @desc Lấy thống kê soi cầu bắc cầu
- * @query {number} days - Số ngày (90, 120, 150, 180, default: 90)
+ * @query {number} days - Số ngày (90, 120, 150, 180, 240, 270, 300, 365; default: 90)
  * @access Public
  */
 router.get('/', statsLimiter, async (req, res) => {
@@ -43,7 +43,7 @@ router.get('/', statsLimiter, async (req, res) => {
 /**
  * @route PUT /api/soicau-bac-cau
  * @desc Cập nhật thống kê soi cầu bắc cầu
- * @query {number} days - Số ngày (90, 120, 150, 180, default: 90)
+ * @query {number} days - Số ngày (90, 120, 150, 180, 240, 270, 300, 365; default: 90)
  * @access Public
  */
 router.put('/', updateLimiter, async (req, res) => {

@@ -94,6 +94,29 @@ class Database {
             name: mongoose.connection.name
         };
     }
+
+    async waitForConnection(timeoutMs = 15000) {
+        const readyState = mongoose.connection.readyState;
+
+        if (readyState === 1) {
+            return;
+        }
+
+        const connectPromise = (async () => {
+            if (readyState === 2) {
+                return mongoose.connection.asPromise();
+            }
+            return this.connect();
+        })();
+
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => {
+                reject(new Error('MongoDB connection timeout'));
+            }, timeoutMs);
+        });
+
+        return Promise.race([connectPromise, timeoutPromise]);
+    }
 }
 
 // Singleton instance

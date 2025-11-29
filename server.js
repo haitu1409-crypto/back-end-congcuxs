@@ -18,23 +18,22 @@ const uploadRoutes = require('./src/routes/upload.routes');
 const xsmbScraperRoutes = require('./src/routes/xsmbScraper.routes');
 const resultMBRoutes = require('./src/routes/resultMB.routes');
 const statsUpdateRoutes = require('./src/routes/statsUpdate.routes');
-const soiCauRoutes = require('./src/routes/soiCau.routes');
 const positionSoiCauRoutes = require('./src/routes/positionSoiCau.routes');
+const positionSoiCauLotoRoutes = require('./src/routes/positionSoiCauLoto.routes');
 const soiCauBacCauRoutes = require('./src/routes/soiCauBacCau.routes');
 const bayesianRoutes = require('./src/routes/bayesian.routes');
-const soicauPageRoutes = require('./src/routes/soicauPage.routes');
 const advancedGapAnalysisRoutes = require('./src/routes/advancedGapAnalysis.routes');
+const soicauPageRoutes = require('./src/routes/soicauPage.routes');
 const ultraAdvancedSoiCauRoutes = require('./src/routes/ultraAdvancedSoiCau.routes');
-const bachThuDeRoutes = require('./src/routes/bachThuDe.routes');
-const schedulerRoutes = require('./src/routes/scheduler.routes');
-const testRoutes = require('./src/routes/test.routes');
 const authRoutes = require('./src/routes/auth.routes');
 const chatRoutes = require('./src/routes/chat.routes');
 const adminRoutes = require('./src/routes/admin.routes');
+const thongKeImageRoutes = require('./src/routes/thongKeImage.routes');
+const initTelegramBot = require('./src/services/telegramBot.service');
 
 const database = require('./src/config/database');
 const xsmbScheduler = require('./src/services/xsmbScheduler.service');
-const optimizedSoiCauScheduler = require('./src/services/optimizedSoiCauScheduler.service');
+const thongKeNhanhScheduler = require('./src/services/thongKeNhanhScheduler.service');
 // Keep-alive middleware removed for Pro version
 
 const app = express();
@@ -207,6 +206,32 @@ app.use(compression());
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
+const telegramBot = initTelegramBot();
+if (telegramBot) {
+    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || 'telegram-webhook';
+    const webhookPath = '/telegram/' + webhookSecret;
+    const publicWebhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
+
+    if (publicWebhookUrl) {
+        console.log('[TelegramBot] Using webhook at ' + publicWebhookUrl + webhookPath);
+        app.use(webhookPath, telegramBot.webhookCallback(webhookPath));
+
+        telegramBot.telegram.setWebhook(publicWebhookUrl + webhookPath)
+            .then(() => console.log('[TelegramBot] Webhook registered successfully'))
+            .catch(error => console.error('[TelegramBot] Failed to set webhook:', error.message));
+    } else {
+        telegramBot.launch()
+            .then(() => console.log('[TelegramBot] Running in long-polling mode'))
+            .catch(error => console.error('[TelegramBot] Unable to start long-polling:', error.message));
+
+        process.once('SIGINT', () => telegramBot.stop('SIGINT'));
+        process.once('SIGTERM', () => telegramBot.stop('SIGTERM'));
+    }
+} else {
+    console.warn('[TelegramBot] Bot disabled (missing TELEGRAM_BOT_TOKEN).');
+}
+
+
 // Logging middleware
 if (process.env.NODE_ENV === 'development') {
     app.use(morgan('dev'));
@@ -297,8 +322,6 @@ app.use('/api/admin/', chatApiLimiter);
 
 // Áp dụng rate limiting nặng hơn cho các API cụ thể
 app.use('/api/soicau-page/', heavyApiLimiter);
-app.use('/api/bach-thu-de/', heavyApiLimiter);
-app.use('/api/soicau/', heavyApiLimiter);
 
 // Health check endpoint for UptimeRobot monitoring
 app.get('/health', (req, res) => {
@@ -388,17 +411,15 @@ app.use('/api/predictions', predictionRoutes);
 app.use('/api/xsmb', xsmbScraperRoutes);
 app.use('/api/kqxs', resultMBRoutes);
 app.use('/api/kqxs', statsUpdateRoutes);
-app.use('/api/soicau', soiCauRoutes);
 app.use('/api/position-soicau', positionSoiCauRoutes);
+app.use('/api/position-soicau-loto', positionSoiCauLotoRoutes);
 app.use('/api/soicau-bac-cau', soiCauBacCauRoutes);
 app.use('/api/bayesian', bayesianRoutes);
 app.use('/api/soicau-page', soicauPageRoutes);
 app.use('/api/advanced-gap-analysis', advancedGapAnalysisRoutes);
 app.use('/api/ultra-advanced-soicau', ultraAdvancedSoiCauRoutes);
-app.use('/api/bach-thu-de', bachThuDeRoutes);
-app.use('/api/scheduler', schedulerRoutes);
-app.use('/api/test', testRoutes);
 app.use('/api', uploadRoutes);
+app.use('/api', thongKeImageRoutes);
 
 // Auth routes
 app.use('/api/auth', authRoutes);
@@ -427,7 +448,7 @@ app.use('/uploads', (req, res, next) => {
 }, express.static('uploads', {
     setHeaders: (res, path) => {
         // Set cache headers for images
-        if (path.endsWith('.png') || path.endsWith('.jpg') || path.endsWith('.jpeg') || 
+        if (path.endsWith('.png') || path.endsWith('.jpg') || path.endsWith('.jpeg') ||
             path.endsWith('.gif') || path.endsWith('.webp')) {
             res.setHeader('Cache-Control', 'public, max-age=3600');
         }
@@ -487,7 +508,7 @@ const startServer = async () => {
                         }
                     }
                 });
-                
+
                 // Only log error once
                 redisClient.on('error', (err) => {
                     if (!redisErrorLogged) {
@@ -496,12 +517,12 @@ const startServer = async () => {
                         redisErrorLogged = true;
                     }
                 });
-                
+
                 redisClient.on('connect', () => {
                     console.log('✅ Redis connected for caching');
                     redisErrorLogged = false; // Reset flag on successful connection
                 });
-                
+
                 // Try to connect with timeout
                 const connectPromise = redisClient.connect().catch((err) => {
                     if (!redisErrorLogged) {
@@ -509,7 +530,7 @@ const startServer = async () => {
                         redisErrorLogged = true;
                     }
                 });
-                
+
                 // Set timeout for connection attempt
                 await Promise.race([
                     connectPromise,
@@ -528,6 +549,11 @@ const startServer = async () => {
         const { initializeSocket } = require('./src/services/socket.service');
         initializeSocket(server, redisClient);
         console.log('✅ Socket.io initialized for real-time chat');
+
+        // Initialize Lottery Socket Service (namespace /lottery)
+        // Service sẽ tự động khởi tạo sau 1 giây để đảm bảo socket.io đã sẵn sàng
+        require('./src/services/lotterySocket.service');
+        console.log('✅ Lottery Socket Service đang khởi tạo...');
 
         // Kết nối MongoDB trong background (không block server start)
         const connectMongoDBInBackground = async () => {
@@ -558,17 +584,15 @@ const startServer = async () => {
         // Start MongoDB connection in background
         connectMongoDBInBackground();
 
-        // Initialize XSMB Scheduler
+        // Initialize schedulers
         xsmbScheduler.init();
-
-        // Initialize Optimized Soi Cầu Scheduler
-        optimizedSoiCauScheduler.init();
+        thongKeNhanhScheduler.init();
 
         // Graceful shutdown
         process.on('SIGTERM', async () => {
             console.log('SIGTERM signal received: closing HTTP server');
             xsmbScheduler.stop();
-            optimizedSoiCauScheduler.stop();
+            thongKeNhanhScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();
@@ -579,7 +603,7 @@ const startServer = async () => {
         process.on('SIGINT', async () => {
             console.log('SIGINT signal received: closing HTTP server');
             xsmbScheduler.stop();
-            optimizedSoiCauScheduler.stop();
+            thongKeNhanhScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();

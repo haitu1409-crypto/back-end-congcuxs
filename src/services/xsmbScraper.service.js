@@ -1,6 +1,7 @@
 const puppeteer = require('puppeteer');
 const XSMB = require('../models/xsmb.model');
 const database = require('../config/database');
+const lotterySocketService = require('./lotterySocket.service');
 
 // Helper function để delay (thay thế page.waitForTimeout đã deprecated)
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -23,13 +24,16 @@ class XSMBScraperService {
     }
 
     /**
-     * Kiểm tra dữ liệu có đầy đủ không
+     * Kiểm tra dữ liệu có đầy đủ không (với stableCounts và completedPrizes)
      */
-    isDataComplete(result) {
+    isDataComplete(result, completedPrizes, stableCounts) {
         const checkPrize = (key, data, minLength) => {
-            return Array.isArray(data) &&
+            const isValid = Array.isArray(data) &&
                 data.length >= minLength &&
                 data.every(prize => prize && prize !== '...' && !/\*+/.test(prize) && !/\+/.test(prize) && /^\d+$/.test(prize));
+            stableCounts[key] = isValid ? (stableCounts[key] || 0) + 1 : 0;
+            completedPrizes[key] = isValid && stableCounts[key] >= (key === 'specialPrize' ? 2 : 1);
+            return isValid;
         };
 
         const isValidMaDB = result.maDB &&
@@ -38,18 +42,24 @@ class XSMBScraperService {
             result.maDB.trim() !== '...' &&
             !/\*+/.test(result.maDB) &&
             !/\+/.test(result.maDB);
+        stableCounts.maDB = isValidMaDB ? (stableCounts.maDB || 0) + 1 : 0;
+        completedPrizes.maDB = isValidMaDB && stableCounts.maDB >= 1;
 
-        return isValidMaDB &&
+        checkPrize('firstPrize', result.firstPrize || [], 1);
+        checkPrize('secondPrize', result.secondPrize || [], 2);
+        checkPrize('threePrizes', result.threePrizes || [], 6);
+        checkPrize('fourPrizes', result.fourPrizes || [], 4);
+        checkPrize('fivePrizes', result.fivePrizes || [], 6);
+        checkPrize('sixPrizes', result.sixPrizes || [], 3);
+        checkPrize('sevenPrizes', result.sevenPrizes || [], 4);
+        checkPrize('specialPrize', result.specialPrize || [], 1);
+
+        const isComplete = completedPrizes.maDB &&
             result.tentinh &&
             result.tentinh.length >= 1 &&
-            checkPrize('firstPrize', result.firstPrize || [], 1) &&
-            checkPrize('secondPrize', result.secondPrize || [], 2) &&
-            checkPrize('threePrizes', result.threePrizes || [], 6) &&
-            checkPrize('fourPrizes', result.fourPrizes || [], 4) &&
-            checkPrize('fivePrizes', result.fivePrizes || [], 6) &&
-            checkPrize('sixPrizes', result.sixPrizes || [], 3) &&
-            checkPrize('sevenPrizes', result.sevenPrizes || [], 4) &&
-            checkPrize('specialPrize', result.specialPrize || [], 1);
+            Object.keys(completedPrizes).every(k => completedPrizes[k]);
+        if (isComplete) console.log('✅ Dữ liệu hoàn thành');
+        return isComplete;
     }
 
     /**
@@ -138,8 +148,10 @@ class XSMBScraperService {
         let successCount = 0;
         let errorCount = 0;
         const startTime = Date.now();
-        const maxIterations = isTestMode ? 5 : 30; // Giới hạn số lần cào
-        const maxDuration = 10 * 60 * 1000; // 10 phút timeout
+        const pollIntervalMs = isTestMode ? 1000 : 2000;
+        const liveWindowMinutes = isTestMode ? 1 : 18; // cần bám toàn bộ khung 18h14-18h32 (~18 phút)
+        const maxDuration = liveWindowMinutes * 60 * 1000;
+        const maxIterations = Math.ceil(maxDuration / pollIntervalMs);
 
         try {
             console.log(`🚀 Bắt đầu cào XSMB cho ngày ${date} (${isTestMode ? 'Test Mode' : 'Production Mode'})`);
@@ -207,9 +219,42 @@ class XSMBScraperService {
                 'fivePrizes', 'sixPrizes', 'sevenPrizes', 'maDB', 'specialPrize'
             ];
 
-            // Điều hướng đến trang
-            await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 15000 });
-            await delay(2000); // Chờ trang load
+            // Không cần goto ở đây, sẽ goto trong vòng lặp ở lần đầu tiên
+
+            // Khởi tạo lastPrizeData để track thay đổi (giống scraper.js)
+            const lastPrizeData = {
+                firstPrize: ['...'],
+                secondPrize: ['...', '...'],
+                threePrizes: ['...', '...', '...', '...', '...', '...'],
+                fourPrizes: ['...', '...', '...', '...'],
+                fivePrizes: ['...', '...', '...', '...', '...', '...'],
+                sixPrizes: ['...', '...', '...'],
+                sevenPrizes: ['...', '...', '...', '...'],
+                maDB: '...',
+                specialPrize: ['...'],
+            };
+            const completedPrizes = {
+                firstPrize: false,
+                secondPrize: false,
+                threePrizes: false,
+                fourPrizes: false,
+                fivePrizes: false,
+                sixPrizes: false,
+                sevenPrizes: false,
+                maDB: false,
+                specialPrize: false,
+            };
+            const stableCounts = {
+                firstPrize: 0,
+                secondPrize: 0,
+                threePrizes: 0,
+                fourPrizes: 0,
+                fivePrizes: 0,
+                sixPrizes: 0,
+                sevenPrizes: 0,
+                maDB: 0,
+                specialPrize: 0,
+            };
 
             let isComplete = false;
             let lastResult = null;
@@ -217,32 +262,52 @@ class XSMBScraperService {
             // Vòng lặp cào dữ liệu
             while (iteration < maxIterations && !isComplete && (Date.now() - startTime) < maxDuration) {
                 iteration++;
-                console.log(`🔄 Lần cào ${iteration}/${maxIterations}`);
+                const elapsedMs = Date.now() - startTime;
+                const remainingMs = Math.max(maxDuration - elapsedMs, 0);
+                const remainingMinutes = (remainingMs / 1000 / 60).toFixed(1);
+                console.log(`🔄 Lần cào ${iteration}/${maxIterations} (còn ~${remainingMinutes} phút trước khi timeout)`);
 
                 try {
-                    // Chờ các selector xuất hiện
-                    await page.waitForSelector(selectors.maDB, { timeout: 5000 }).catch(() => {
-                        console.log('⚠️ Chưa thấy maDB, tiếp tục...');
-                    });
+                    // Chờ các selector xuất hiện (giống scraper.js)
+                    if (iteration === 1) {
+                        await page.goto(baseUrl, { waitUntil: 'domcontentloaded', timeout: 7000 });
+                        await page.waitForSelector(selectors.maDB, { timeout: 5000 }).catch(() => {
+                            console.log('Chưa thấy maDB, tiếp tục cào...');
+                        });
+                    } else {
+                        await page.waitForSelector(selectors.specialPrize, { timeout: 5000 }).catch(() => {
+                            console.log('Chưa thấy giải đặc biệt, tiếp tục cào...');
+                        });
+                    }
 
-                    // Lấy dữ liệu từ trang
+                    // Chờ dữ liệu maDB tải không đồng bộ (giống scraper.js)
+                    await page.evaluate((maDBSelector) => new Promise(resolve => {
+                        const checkMaDB = () => {
+                            const maDBElement = document.querySelector(maDBSelector);
+                            if (maDBElement && maDBElement.textContent.trim() !== '...' && maDBElement.textContent.trim() !== '****') {
+                                resolve();
+                            } else {
+                                setTimeout(checkMaDB, 500);
+                            }
+                        };
+                        checkMaDB();
+                    }), selectors.maDB).catch(() => console.log('Không thể chờ maDB, tiếp tục...'));
+
+                    // Lấy dữ liệu từ trang (giống scraper.js - lấy từ attribute data trước)
                     const result = await page.evaluate(({ selectors, prizeOrder }) => {
                         const getPrizes = (selector) => {
                             try {
                                 const elements = document.querySelectorAll(selector);
                                 return Array.from(elements)
                                     .map(elem => elem.getAttribute('data')?.trim() || elem.textContent.trim())
-                                    .filter(prize => prize && prize !== '...' && prize !== '****' && prize.match(/^\d+$/));
+                                    .filter(prize => prize && prize !== '...' && prize !== '****' && (prize.match(/^\d+$/) || selector.includes('loai_ve')));
                             } catch (error) {
                                 console.error(`Lỗi lấy selector ${selector}:`, error.message);
                                 return [];
                             }
                         };
 
-                        const result = {
-                            drawDate: document.querySelector('.tngay')?.textContent.trim().replace('Ngày: ', '') || ''
-                        };
-
+                        const result = { drawDate: document.querySelector('.tngay')?.textContent.trim().replace('Ngày: ', '') || '' };
                         for (const prizeType of prizeOrder) {
                             if (prizeType === 'maDB') {
                                 const maDBElement = document.querySelector(selectors.maDB);
@@ -257,28 +322,90 @@ class XSMBScraperService {
                         return result;
                     }, { selectors, prizeOrder });
 
-                    // Tạo kết quả hoàn chỉnh
+                    console.log(`maDB hiện tại: ${result.maDB}, stableCount: ${stableCounts.maDB}, completed: ${completedPrizes.maDB}`);
+
+                    // Tạo kết quả hoàn chỉnh (giữ giá trị cũ nếu không có dữ liệu mới - giống scraper.js)
                     const formattedResult = {
                         drawDate: dateObj,
                         slug,
                         year: dateObj.getFullYear(),
                         month: dateObj.getMonth() + 1,
                         dayOfWeek,
-                        maDB: result.maDB || '...',
+                        maDB: result.maDB || lastPrizeData.maDB,
                         tentinh: result.tentinh || tentinh,
                         tinh,
-                        firstPrize: Array.isArray(result.firstPrize) && result.firstPrize.length ? result.firstPrize : ['...'],
-                        secondPrize: Array.isArray(result.secondPrize) && result.secondPrize.length ? result.secondPrize : ['...', '...'],
-                        threePrizes: Array.isArray(result.threePrizes) && result.threePrizes.length ? result.threePrizes : ['...', '...', '...', '...', '...', '...'],
-                        fourPrizes: Array.isArray(result.fourPrizes) && result.fourPrizes.length ? result.fourPrizes : ['...', '...', '...', '...'],
-                        fivePrizes: Array.isArray(result.fivePrizes) && result.fivePrizes.length ? result.fivePrizes : ['...', '...', '...', '...', '...', '...'],
-                        sixPrizes: Array.isArray(result.sixPrizes) && result.sixPrizes.length ? result.sixPrizes : ['...', '...', '...'],
-                        sevenPrizes: Array.isArray(result.sevenPrizes) && result.sevenPrizes.length ? result.sevenPrizes : ['...', '...', '...', '...'],
-                        specialPrize: Array.isArray(result.specialPrize) && result.specialPrize.length ? result.specialPrize : ['...'],
+                        firstPrize: Array.isArray(result.firstPrize) && result.firstPrize.length ? result.firstPrize : lastPrizeData.firstPrize,
+                        secondPrize: Array.isArray(result.secondPrize) && result.secondPrize.length ? result.secondPrize : lastPrizeData.secondPrize,
+                        threePrizes: Array.isArray(result.threePrizes) && result.threePrizes.length ? result.threePrizes : lastPrizeData.threePrizes,
+                        fourPrizes: Array.isArray(result.fourPrizes) && result.fourPrizes.length ? result.fourPrizes : lastPrizeData.fourPrizes,
+                        fivePrizes: Array.isArray(result.fivePrizes) && result.fivePrizes.length ? result.fivePrizes : lastPrizeData.fivePrizes,
+                        sixPrizes: Array.isArray(result.sixPrizes) && result.sixPrizes.length ? result.sixPrizes : lastPrizeData.sixPrizes,
+                        sevenPrizes: Array.isArray(result.sevenPrizes) && result.sevenPrizes.length ? result.sevenPrizes : lastPrizeData.sevenPrizes,
+                        specialPrize: Array.isArray(result.specialPrize) && result.specialPrize.length ? result.specialPrize : lastPrizeData.specialPrize,
                         station,
                         createdAt: new Date(),
                         scrapedAt: new Date(),
                     };
+
+                    // Thử lại cào maDB nếu chưa hoàn thành (giống scraper.js)
+                    if (!completedPrizes.maDB && iteration % 5 === 0) {
+                        console.log('Thử lại cào maDB...');
+                        const maDBElement = await page.$eval(selectors.maDB, el => el.textContent.trim()).catch(() => '...');
+                        if (maDBElement !== '...' && maDBElement !== '****' && maDBElement !== '') {
+                            formattedResult.maDB = maDBElement;
+                            lastPrizeData.maDB = maDBElement;
+                        }
+                    }
+
+                    // Track thay đổi và emit real-time updates (giống scraper.js)
+                    const changes = [];
+                    const prizeTypes = [
+                        { key: 'firstPrize', data: formattedResult.firstPrize, isArray: true, minLength: 1 },
+                        { key: 'secondPrize', data: formattedResult.secondPrize, isArray: true, minLength: 2 },
+                        { key: 'threePrizes', data: formattedResult.threePrizes, isArray: true, minLength: 6 },
+                        { key: 'fourPrizes', data: formattedResult.fourPrizes, isArray: true, minLength: 4 },
+                        { key: 'fivePrizes', data: formattedResult.fivePrizes, isArray: true, minLength: 6 },
+                        { key: 'sixPrizes', data: formattedResult.sixPrizes, isArray: true, minLength: 3 },
+                        { key: 'sevenPrizes', data: formattedResult.sevenPrizes, isArray: true, minLength: 4 },
+                        { key: 'maDB', data: formattedResult.maDB, isArray: false, minLength: 1 },
+                        { key: 'specialPrize', data: formattedResult.specialPrize, isArray: true, minLength: 1 },
+                    ];
+
+                    for (const { key, data, isArray, minLength } of prizeTypes) {
+                        if (isArray) {
+                            if (!Array.isArray(data)) {
+                                console.warn(`Dữ liệu ${key} không phải mảng, bỏ qua`);
+                                continue;
+                            }
+                            for (const [index, prize] of data.entries()) {
+                                if (prize && prize !== '...' && prize !== '****' && /^\d+$/.test(prize) && prize !== lastPrizeData[key][index]) {
+                                    changes.push({ key: `${key}_${index}`, data: prize });
+                                    lastPrizeData[key][index] = prize;
+                                }
+                            }
+                        } else if (data !== lastPrizeData[key]) {
+                            changes.push({ key, data });
+                            lastPrizeData[key] = data;
+                        }
+                    }
+
+                    // Emit real-time updates qua Socket.io khi có thay đổi
+                    if (changes.length > 0) {
+                        for (const change of changes) {
+                            await lotterySocketService.emitPrizeUpdate(change.key, change.data, formattedResult);
+                        }
+                    }
+
+                    // Cập nhật formattedResult với lastPrizeData (giống scraper.js)
+                    formattedResult.firstPrize = lastPrizeData.firstPrize;
+                    formattedResult.secondPrize = lastPrizeData.secondPrize;
+                    formattedResult.threePrizes = lastPrizeData.threePrizes;
+                    formattedResult.fourPrizes = lastPrizeData.fourPrizes;
+                    formattedResult.fivePrizes = lastPrizeData.fivePrizes;
+                    formattedResult.sixPrizes = lastPrizeData.sixPrizes;
+                    formattedResult.sevenPrizes = lastPrizeData.sevenPrizes;
+                    formattedResult.maDB = lastPrizeData.maDB;
+                    formattedResult.specialPrize = lastPrizeData.specialPrize;
 
                     console.log(`📊 Dữ liệu lần ${iteration}:`, {
                         maDB: formattedResult.maDB,
@@ -290,19 +417,22 @@ class XSMBScraperService {
                         sixPrizes: formattedResult.sixPrizes.length,
                         sevenPrizes: formattedResult.sevenPrizes.length,
                         specialPrize: formattedResult.specialPrize.length,
+                        changes: changes.length
                     });
 
-                    // Kiểm tra dữ liệu đầy đủ
-                    isComplete = this.isDataComplete(formattedResult);
+                    // Kiểm tra dữ liệu đầy đủ với stableCounts và completedPrizes
+                    isComplete = this.isDataComplete(formattedResult, completedPrizes, stableCounts);
                     lastResult = formattedResult;
 
                     if (isComplete) {
                         console.log('✅ Dữ liệu đã đầy đủ!');
+                        // Emit complete result
+                        await lotterySocketService.emitFullResultUpdate(formattedResult);
                         break;
                     }
 
                     // Chờ trước khi cào lại
-                    await delay(isTestMode ? 1000 : 2000);
+                    await delay(pollIntervalMs);
                     successCount++;
 
                 } catch (error) {
@@ -315,6 +445,8 @@ class XSMBScraperService {
             // Lưu kết quả cuối cùng
             if (lastResult) {
                 await this.saveToMongoDB(lastResult);
+                // Emit final update
+                await lotterySocketService.emitFullResultUpdate(lastResult);
             }
 
             const totalDuration = (Date.now() - startTime) / 1000;
@@ -384,6 +516,54 @@ class XSMBScraperService {
      */
     async scrapeSpecificDate(date) {
         return await this.scrapeXSMB(date, 'xsmb', false);
+    }
+
+    /**
+     * Emit real-time updates khi có thay đổi
+     */
+    async emitRealtimeUpdates(currentResult, previousResult) {
+        try {
+            // So sánh và emit các prize đã thay đổi
+            const prizeTypes = [
+                { key: 'maDB', isArray: false },
+                { key: 'specialPrize', isArray: true, index: 0 },
+                { key: 'firstPrize', isArray: true, index: 0 },
+                { key: 'secondPrize', isArray: true, indices: [0, 1] },
+                { key: 'threePrizes', isArray: true, indices: [0, 1, 2, 3, 4, 5] },
+                { key: 'fourPrizes', isArray: true, indices: [0, 1, 2, 3] },
+                { key: 'fivePrizes', isArray: true, indices: [0, 1, 2, 3, 4, 5] },
+                { key: 'sixPrizes', isArray: true, indices: [0, 1, 2] },
+                { key: 'sevenPrizes', isArray: true, indices: [0, 1, 2, 3] },
+            ];
+
+            for (const prizeType of prizeTypes) {
+                if (prizeType.isArray) {
+                    const indices = prizeType.indices || [prizeType.index];
+                    for (const index of indices) {
+                        const currentValue = Array.isArray(currentResult[prizeType.key])
+                            ? currentResult[prizeType.key][index]
+                            : '...';
+                        const previousValue = previousResult && Array.isArray(previousResult[prizeType.key])
+                            ? previousResult[prizeType.key][index]
+                            : '...';
+
+                        if (currentValue !== previousValue && currentValue !== '...' && /^\d+$/.test(currentValue)) {
+                            const prizeTypeKey = `${prizeType.key}_${index}`;
+                            await lotterySocketService.emitPrizeUpdate(prizeTypeKey, currentValue, currentResult);
+                        }
+                    }
+                } else {
+                    const currentValue = currentResult[prizeType.key] || '...';
+                    const previousValue = previousResult ? (previousResult[prizeType.key] || '...') : '...';
+
+                    if (currentValue !== previousValue && currentValue !== '...' && /^\d+$/.test(currentValue)) {
+                        await lotterySocketService.emitPrizeUpdate(prizeType.key, currentValue, currentResult);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error('Error emitting realtime updates:', error);
+        }
     }
 
     /**

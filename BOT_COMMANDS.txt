@@ -1,0 +1,9 @@
+start - Khởi động bot
+help - Xem hướng dẫn sử dụng
+xsmb - Kết quả XSMB mới nhất hoặc theo ngày (ví dụ: /xsmb 25-11)
+thongke - Thống kê nhanh (lô gan, tần suất)
+tk - Thống kê nhanh (lô gan, tần suất)
+wukong - Hiển thị menu chức năng
+
+
+

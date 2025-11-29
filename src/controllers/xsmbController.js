@@ -1,4 +1,4 @@
-const mongoose = require('mongoose');
+﻿const mongoose = require('mongoose');
 const XSMB = require('../models/xsmb.model');
 const LoGanStats = require('../models/stats/loganStats.model');
 const GiaiDacBietStats = require('../models/stats/giaiDacBietStats.model');
@@ -26,8 +26,15 @@ const formatDate = (date) => {
 
 // Hàm tính số ngày giữa 2 ngày
 const getDaysBetween = (start, end) => {
+    // Reset time to 00:00:00 for both dates to calculate exact days
+    const startDate = new Date(start);
+    startDate.setHours(0, 0, 0, 0);
+    const endDate = new Date(end);
+    endDate.setHours(0, 0, 0, 0);
+    
     const oneDay = 24 * 60 * 60 * 1000;
-    return Math.round(Math.abs((end - start) / oneDay));
+    // Use Math.floor to round down (don't round up) for accurate day count
+    return Math.floor(Math.abs((endDate - startDate) / oneDay));
 };
 
 // Hàm xác định khoảng lọc dựa trên days
@@ -171,11 +178,11 @@ const getSpecialPrizeStatsByWeek = async (req, res) => {
         }
 
         // Lấy từ database model trước
-        const dbStats = await GiaiDacBietTuanStats.findOne({ 
-            month: Number(month), 
-            year: Number(year) 
+        const dbStats = await GiaiDacBietTuanStats.findOne({
+            month: Number(month),
+            year: Number(year)
         });
-        
+
         if (dbStats) {
             console.log(`✅ Trả về dữ liệu từ database model: month=${month}, year=${year}`);
             const result = {
@@ -188,7 +195,7 @@ const getSpecialPrizeStatsByWeek = async (req, res) => {
         // Nếu không có trong database, tính toán mới và lưu vào database
         console.log(`⚠️ Không có dữ liệu trong database, đang tính toán...`);
         const result = await calculateSpecialPrizeStatsByWeek(month, year);
-        
+
         // Tự động lưu vào database để lần sau không phải tính lại
         await GiaiDacBietTuanStats.findOneAndUpdate(
             { month: Number(month), year: Number(year) },
@@ -202,7 +209,7 @@ const getSpecialPrizeStatsByWeek = async (req, res) => {
             { upsert: true, new: true }
         );
         console.log(`✅ Đã tự động lưu thống kê Giải Đặc Biệt Tuần vào database: month=${month}, year=${year}`);
-        
+
         res.status(200).json(result);
     } catch (error) {
         console.error('Lỗi trong getSpecialPrizeStatsByWeek:', error.message);
@@ -297,7 +304,22 @@ const calculateLoGan = async (days) => {
 
         stats.forEach(stat => {
             if (stat.hasAppeared) {
-                const daysSinceLastAppeared = getDaysBetween(stat.lastAppeared, endDate);
+                // Calculate days since last appeared (gap days)
+                // Reset times to 00:00:00 for accurate day calculation
+                const lastAppearedStart = new Date(stat.lastAppeared);
+                lastAppearedStart.setHours(0, 0, 0, 0);
+                const todayStart = new Date(endDate);
+                todayStart.setHours(0, 0, 0, 0);
+                
+                // Calculate gap: number of days since last appeared (gap days)
+                // Gap counts from the day AFTER appearance to yesterday (not counting appearance day or today)
+                // Example: appeared on 01/11, today is 24/11
+                //   Gap should be: from 02/11 to 23/11 = 22 days (not counting today 24/11)
+                //   Calculate: totalDays from 01/11 to 24/11 = 23 days
+                //   Subtract 1 to exclude today: 23 - 1 = 22 days
+                const totalDays = getDaysBetween(lastAppearedStart, todayStart);
+                // Subtract 1 day to exclude today from the gap count
+                const daysSinceLastAppeared = Math.max(0, totalDays - 1);
                 stat.gapDraws = daysSinceLastAppeared;
                 stat.maxGap = stat.gaps.length > 0 ? Math.max(...stat.gaps) : daysSinceLastAppeared;
             }
@@ -308,7 +330,8 @@ const calculateLoGan = async (days) => {
 
         const filteredStats = appearedStats
             .filter(stat => {
-                const daysSinceLastAppeared = getDaysBetween(stat.lastAppeared, endDate);
+                // Use the same calculation as above (already calculated in stat.gapDraws)
+                const daysSinceLastAppeared = stat.gapDraws;
                 const passesFilter = daysSinceLastAppeared >= minDays && daysSinceLastAppeared <= maxDays;
                 if (passesFilter) {
                     console.log(`Số ${stat.number} qua bộ lọc: gapDraws=${daysSinceLastAppeared}, lastAppeared=${formatDate(stat.lastAppeared)}`);
@@ -437,10 +460,10 @@ const extractDauDuoi = (number) => {
 // Hàm tính toán Đầu/Đuôi
 const calculateDauDuoiStats = async (days) => {
     try {
-        const validDaysOptions = [30, 60, 90, 120, 180, 365];
+        const validDaysOptions = [30, 60, 90, 120, 180, 270, 365];
         const daysNum = Number(days);
         if (!validDaysOptions.includes(daysNum)) {
-            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 365.');
+            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
         const { maxDays, description } = getFilterRange(daysNum, 'specialPrize');
@@ -571,10 +594,10 @@ const calculateDauDuoiStats = async (days) => {
 // Hàm tính toán Đầu/Đuôi theo ngày
 const calculateDauDuoiStatsByDate = async (days) => {
     try {
-        const validDaysOptions = [30, 60, 90, 120, 180, 365];
+        const validDaysOptions = [30, 60, 90, 120, 180, 270, 365];
         const daysNum = Number(days);
         if (!validDaysOptions.includes(daysNum)) {
-            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 365.');
+            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
         const { maxDays, description } = getFilterRange(daysNum, 'specialPrize');
@@ -667,13 +690,13 @@ const getLoGanStats = async (req, res) => {
         }
 
         // Lấy từ database model trước
-        const filterType = days === 6 ? 'below-7' : 
-                          days === 7 ? '7-14' : 
-                          days === 14 ? '14-28' :
-                          days === 30 ? '30' : '60';
+        const filterType = days === 6 ? 'below-7' :
+            days === 7 ? '7-14' :
+                days === 14 ? '14-28' :
+                    days === 30 ? '30' : '60';
 
         const dbStats = await LoGanStats.findOne({ filterType });
-        
+
         if (dbStats) {
             console.log(`✅ Trả về dữ liệu từ database model: ${filterType}`);
             const result = {
@@ -686,7 +709,7 @@ const getLoGanStats = async (req, res) => {
         // Nếu không có trong database, tính toán mới và lưu vào database
         console.log(`⚠️ Không có dữ liệu trong database, đang tính toán...`);
         const result = await calculateLoGan(days);
-        
+
         // Tự động lưu vào database để lần sau không phải tính lại
         await LoGanStats.findOneAndUpdate(
             { filterType },
@@ -700,7 +723,7 @@ const getLoGanStats = async (req, res) => {
             { upsert: true, new: true }
         );
         console.log(`✅ Đã tự động lưu thống kê Lô Gan vào database: ${filterType}`);
-        
+
         res.status(200).json(result);
     } catch (error) {
         console.error('Lỗi trong getLoGanStats:', error.message);
@@ -724,7 +747,7 @@ const getSpecialPrizeStats = async (req, res) => {
 
         // Lấy từ database model trước
         const dbStats = await GiaiDacBietStats.findOne({ days: Number(days) });
-        
+
         if (dbStats) {
             console.log(`✅ Trả về dữ liệu từ database model: days=${days}`);
             const result = {
@@ -737,7 +760,7 @@ const getSpecialPrizeStats = async (req, res) => {
         // Nếu không có trong database, tính toán mới và lưu vào database
         console.log(`⚠️ Không có dữ liệu trong database, đang tính toán...`);
         const result = await calculateSpecialPrizeStats(days);
-        
+
         // Tự động lưu vào database để lần sau không phải tính lại
         await GiaiDacBietStats.findOneAndUpdate(
             { days: Number(days) },
@@ -750,7 +773,7 @@ const getSpecialPrizeStats = async (req, res) => {
             { upsert: true, new: true }
         );
         console.log(`✅ Đã tự động lưu thống kê Giải Đặc Biệt vào database: days=${days}`);
-        
+
         res.status(200).json(result);
     } catch (error) {
         console.error('Lỗi trong getSpecialPrizeStats:', error.message);
@@ -769,12 +792,12 @@ const getDauDuoiStats = async (req, res) => {
     const { days } = req.query;
     try {
         if (!days || isNaN(days)) {
-            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 365.');
+            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
         // Lấy từ database model trước
         const dbStats = await DauDuoiStats.findOne({ days: Number(days) });
-        
+
         if (dbStats) {
             console.log(`✅ Trả về dữ liệu từ database model: days=${days}`);
             const result = {
@@ -789,7 +812,7 @@ const getDauDuoiStats = async (req, res) => {
         // Nếu không có trong database, tính toán mới và lưu vào database
         console.log(`⚠️ Không có dữ liệu trong database, đang tính toán...`);
         const result = await calculateDauDuoiStats(days);
-        
+
         // Tự động lưu vào database để lần sau không phải tính lại
         await DauDuoiStats.findOneAndUpdate(
             { days: Number(days) },
@@ -804,7 +827,7 @@ const getDauDuoiStats = async (req, res) => {
             { upsert: true, new: true }
         );
         console.log(`✅ Đã tự động lưu thống kê Đầu Đuôi vào database: days=${days}`);
-        
+
         res.status(200).json(result);
     } catch (error) {
         console.error('Lỗi trong getDauDuoiStats:', error.message);
@@ -823,11 +846,11 @@ const getDauDuoiStatsByDate = async (req, res) => {
     const { days } = req.query;
     try {
         if (!days || isNaN(days)) {
-            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 365.');
+            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
         const cacheKey = `dauDuoiByDate:${days}`;
-        
+
         const cached = memoryCache.get(cacheKey);
         if (cached) {
             console.log(`Trả về dữ liệu từ cache: ${cacheKey}`);
@@ -854,10 +877,10 @@ const getDauDuoiStatsByDate = async (req, res) => {
 // Hàm tính toán Tần Suất Loto
 const calculateTanSuatLoto = async (days) => {
     try {
-        const validDaysOptions = [30, 60, 90, 120, 180, 365];
+        const validDaysOptions = [30, 60, 90, 120, 180, 270, 365];
         const daysNum = Number(days);
         if (!validDaysOptions.includes(daysNum)) {
-            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 365.');
+            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
         const { maxDays, description } = getFilterRange(daysNum, 'specialPrize');
@@ -946,12 +969,12 @@ const getTanSuatLotoStats = async (req, res) => {
     const { days } = req.query;
     try {
         if (!days || isNaN(days)) {
-            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 365.');
+            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
         // Lấy từ database model trước
         const dbStats = await TanSuatLotoStats.findOne({ days: Number(days) });
-        
+
         if (dbStats) {
             console.log(`✅ Trả về dữ liệu từ database model: days=${days}`);
             const result = {
@@ -964,7 +987,7 @@ const getTanSuatLotoStats = async (req, res) => {
         // Nếu không có trong database, tính toán mới và lưu vào database
         console.log(`⚠️ Không có dữ liệu trong database, đang tính toán...`);
         const result = await calculateTanSuatLoto(days);
-        
+
         // Tự động lưu vào database để lần sau không phải tính lại
         await TanSuatLotoStats.findOneAndUpdate(
             { days: Number(days) },
@@ -977,7 +1000,7 @@ const getTanSuatLotoStats = async (req, res) => {
             { upsert: true, new: true }
         );
         console.log(`✅ Đã tự động lưu thống kê Tần Suất Lô Tô vào database: days=${days}`);
-        
+
         res.status(200).json(result);
     } catch (error) {
         console.error('Lỗi trong getTanSuatLotoStats:', error.message);
@@ -1007,10 +1030,10 @@ const predefinedLoCapPairs = [
 // Hàm tính toán Tần Suất Lô Cặp
 const calculateTanSuatLoCap = async (days) => {
     try {
-        const validDaysOptions = [30, 60, 90, 120, 180, 365];
+        const validDaysOptions = [30, 60, 90, 120, 180, 270, 365];
         const daysNum = Number(days);
         if (!validDaysOptions.includes(daysNum)) {
-            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 365.');
+            throw new Error('Tham số days không hợp lệ. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
         const { maxDays, description } = getFilterRange(daysNum, 'specialPrize');
@@ -1138,12 +1161,12 @@ const getTanSuatLoCapStats = async (req, res) => {
     const { days } = req.query;
     try {
         if (!days || isNaN(days)) {
-            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 365.');
+            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
         // Lấy từ database model trước
         const dbStats = await TanSuatLoCapStats.findOne({ days: Number(days) });
-        
+
         if (dbStats) {
             console.log(`✅ Trả về dữ liệu từ database model: days=${days}`);
             const result = {
@@ -1156,7 +1179,7 @@ const getTanSuatLoCapStats = async (req, res) => {
         // Nếu không có trong database, tính toán mới và lưu vào database
         console.log(`⚠️ Không có dữ liệu trong database, đang tính toán...`);
         const result = await calculateTanSuatLoCap(days);
-        
+
         // Tự động lưu vào database để lần sau không phải tính lại
         await TanSuatLoCapStats.findOneAndUpdate(
             { days: Number(days) },
@@ -1169,11 +1192,67 @@ const getTanSuatLoCapStats = async (req, res) => {
             { upsert: true, new: true }
         );
         console.log(`✅ Đã tự động lưu thống kê Tần Suất Lô Cặp vào database: days=${days}`);
-        
+
         res.status(200).json(result);
     } catch (error) {
         console.error('Lỗi trong getTanSuatLoCapStats:', error.message);
         if (error.message.includes('Không tìm thấy dữ liệu')) {
+            res.status(404).json({ error: error.message });
+        } else if (error.message.includes('Invalid') || error.message.includes('required')) {
+            res.status(400).json({ error: error.message });
+        } else {
+            res.status(500).json({ error: `Lỗi máy chủ nội bộ: ${error.message}` });
+        }
+    }
+};
+
+// Controller cho thống kê chi tiết Giải Đặc Biệt
+const getSpecialDetailedStats = async (req, res) => {
+    const { days } = req.query;
+    try {
+        if (!days || isNaN(days)) {
+            throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 10, 20, 30, 60, 90, 365.');
+        }
+
+        const { getSpecialDetailedStats: getStats } = require('../services/specialDetailedStats.service');
+        const dbStats = await getStats(Number(days));
+
+        if (dbStats) {
+            console.log(`✅ Trả về thống kê chi tiết từ database: days=${days}`);
+            return res.status(200).json({
+                numberGaps: dbStats.numberGaps,
+                sumGaps: dbStats.sumGaps,
+                chamGaps: dbStats.chamGaps,
+                boGaps: dbStats.boGaps,
+                boFrequency: dbStats.boFrequency,
+                dauGaps: dbStats.dauGaps,
+                duoiGaps: dbStats.duoiGaps,
+                dauFrequency: dbStats.dauFrequency,
+                duoiFrequency: dbStats.duoiFrequency,
+                metadata: dbStats.metadata
+            });
+        }
+
+        // Nếu không có trong database, tính toán mới
+        console.log(`⚠️ Không có thống kê chi tiết trong database, đang tính toán...`);
+        const { calculateAndSaveSpecialDetailedStats } = require('../services/specialDetailedStats.service');
+        const result = await calculateAndSaveSpecialDetailedStats(Number(days));
+
+        res.status(200).json({
+            numberGaps: result.numberGaps,
+            sumGaps: result.sumGaps,
+            chamGaps: result.chamGaps,
+            boGaps: result.boGaps,
+            boFrequency: result.boFrequency,
+            dauGaps: result.dauGaps,
+            duoiGaps: result.duoiGaps,
+            dauFrequency: result.dauFrequency,
+            duoiFrequency: result.duoiFrequency,
+            metadata: result.metadata
+        });
+    } catch (error) {
+        console.error('Lỗi trong getSpecialDetailedStats:', error.message);
+        if (error.message.includes('Không tìm thấy')) {
             res.status(404).json({ error: error.message });
         } else if (error.message.includes('Invalid') || error.message.includes('required')) {
             res.status(400).json({ error: error.message });
@@ -1191,6 +1270,7 @@ module.exports = {
     getDauDuoiStatsByDate,
     getTanSuatLotoStats,
     getTanSuatLoCapStats,
+    getSpecialDetailedStats,
     // Export calculate functions for stats update
     calculateLoGanStats: calculateLoGan,
     calculateSpecialPrizeStats,

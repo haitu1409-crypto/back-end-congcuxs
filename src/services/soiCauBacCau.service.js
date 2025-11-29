@@ -218,7 +218,7 @@ class SoiCauBacCauService {
             const endDate = new Date();
             endDate.setHours(23, 59, 59, 999);
             
-            const startDate = new Date(endDate);
+            let startDate = new Date(endDate);
             startDate.setDate(startDate.getDate() - days + 1);
             startDate.setHours(0, 0, 0, 0);
 
@@ -324,12 +324,21 @@ class SoiCauBacCauService {
             });
 
             // Tính metadata
+            const coverageStatus = statistics.length < days ? 'partial' : 'full';
+            const coverageMessage = coverageStatus === 'partial'
+                ? `Chỉ có ${statistics.length} ngày dữ liệu trong hệ thống (yêu cầu ${days} ngày). Đã trả về tối đa dữ liệu hiện có.`
+                : null;
+
             const metadata = {
                 startDate: this.formatDate(startDate),
                 endDate: this.formatDate(endDate),
                 totalDays: statistics.length, // Số ngày thực tế có dữ liệu
-                totalResults: results.length, // Tổng số kết quả từ database
                 totalCells: Math.ceil(statistics.length / 7) * 7, // Làm tròn lên số tuần * 7
+                requestedDays: days,
+                availableDays: statistics.length,
+                coverageStatus,
+                coverageMessage,
+                message: coverageMessage,
                 lastUpdated: new Date()
             };
 
