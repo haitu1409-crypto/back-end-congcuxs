@@ -47,17 +47,41 @@ app.use(helmet({
 }));
 
 // CORS configuration
-const allowedOrigins = process.env.FRONTEND_URL
+const defaultOrigins = [
+    'https://www.taodandewukong.pro',
+    'https://taodandewukong.pro',
+    'http://localhost:3000',
+    'http://localhost:3001',
+    'http://localhost:3002',
+    'http://localhost:3003',
+    'http://localhost:3004'
+];
+
+let allowedOrigins = process.env.FRONTEND_URL
     ? process.env.FRONTEND_URL.split(',').map(origin => origin.trim())
-    : [
-        'https://www.taodandewukong.pro',
-        'https://taodandewukong.pro',
-        'http://localhost:3000',
-        'http://localhost:3001',
-        'http://localhost:3002',
-        'http://localhost:3003',
-        'http://localhost:3004'
-    ];
+    : defaultOrigins;
+
+// Đảm bảo luôn có cả www và non-www cho taodandewukong.pro
+const ensureTaodandewukongOrigins = (origins) => {
+    const hasWww = origins.some(o => o.includes('www.taodandewukong.pro'));
+    const hasNonWww = origins.some(o => o.includes('taodandewukong.pro') && !o.includes('www.'));
+
+    const result = [...origins];
+
+    if (!hasWww && origins.some(o => o.includes('taodandewukong.pro'))) {
+        result.push('https://www.taodandewukong.pro');
+        console.log('🔧 Added www.taodandewukong.pro to allowed origins');
+    }
+
+    if (!hasNonWww && origins.some(o => o.includes('www.taodandewukong.pro'))) {
+        result.push('https://taodandewukong.pro');
+        console.log('🔧 Added taodandewukong.pro (non-www) to allowed origins');
+    }
+
+    return result;
+};
+
+allowedOrigins = ensureTaodandewukongOrigins(allowedOrigins);
 
 // Add wildcard support for development
 if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
@@ -84,17 +108,26 @@ app.use(cors({
         // Check for subdomain matches (e.g., www.taodandewukong.pro matches taodandewukong.pro)
         const isSubdomainMatch = allowedOrigins.some(allowedOrigin => {
             if (allowedOrigin.includes('.')) {
-                const domain = allowedOrigin.replace(/^https?:\/\//, '');
-                const requestDomain = origin.replace(/^https?:\/\//, '');
+                const domain = allowedOrigin.replace(/^https?:\/\//, '').toLowerCase();
+                const requestDomain = origin.replace(/^https?:\/\//, '').toLowerCase();
 
                 // Exact match
-                if (requestDomain === domain) return true;
+                if (requestDomain === domain) {
+                    console.log('✅ Exact domain match:', requestDomain, '===', domain);
+                    return true;
+                }
 
                 // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
-                if (requestDomain.endsWith('.' + domain)) return true;
+                if (requestDomain.endsWith('.' + domain)) {
+                    console.log('✅ Subdomain match (request is subdomain of allowed):', requestDomain, 'ends with', '.' + domain);
+                    return true;
+                }
 
                 // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
-                if (domain.endsWith('.' + requestDomain)) return true;
+                if (domain.endsWith('.' + requestDomain)) {
+                    console.log('✅ Reverse subdomain match (allowed is subdomain of request):', domain, 'ends with', '.' + requestDomain);
+                    return true;
+                }
 
                 // Check if both are subdomains of the same root domain
                 const requestParts = requestDomain.split('.');
@@ -103,7 +136,10 @@ app.use(cors({
                 if (requestParts.length >= 2 && domainParts.length >= 2) {
                     const requestRoot = requestParts.slice(-2).join('.');
                     const domainRoot = domainParts.slice(-2).join('.');
-                    return requestRoot === domainRoot;
+                    if (requestRoot === domainRoot) {
+                        console.log('✅ Same root domain match:', requestRoot, '===', domainRoot);
+                        return true;
+                    }
                 }
             }
             return false;
@@ -146,13 +182,13 @@ app.options('*', cors());
 app.use((req, res, next) => {
     const origin = req.headers.origin;
 
-    // Check if origin is allowed
+    // Check if origin is allowed (same logic as CORS middleware)
     const isAllowedOrigin = allowedOrigins.includes('*') ||
         allowedOrigins.includes(origin) ||
         (origin && allowedOrigins.some(allowedOrigin => {
             if (allowedOrigin.includes('.')) {
-                const domain = allowedOrigin.replace(/^https?:\/\//, '');
-                const requestDomain = origin.replace(/^https?:\/\//, '');
+                const domain = allowedOrigin.replace(/^https?:\/\//, '').toLowerCase();
+                const requestDomain = origin.replace(/^https?:\/\//, '').toLowerCase();
 
                 // Exact match
                 if (requestDomain === domain) return true;
