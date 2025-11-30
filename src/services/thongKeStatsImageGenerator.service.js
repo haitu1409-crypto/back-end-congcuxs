@@ -179,6 +179,9 @@ class ThongKeStatsImageGeneratorService {
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Thống Kê Nhanh</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
     <style>
         * {
             margin: 0;
@@ -187,7 +190,7 @@ class ThongKeStatsImageGeneratorService {
         }
         
         body {
-            font-family: Arial, sans-serif;
+            font-family: "Roboto", "Segoe UI", "Arial Unicode MS", "Tahoma", "Verdana", sans-serif;
             background: #ffffff;
             padding: 20px;
             margin: 0;
