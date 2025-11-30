@@ -14,8 +14,6 @@ class XSMBSchedulerService {
      * Khởi tạo scheduler
      */
     init() {
-        console.log('🕐 Khởi tạo XSMB Scheduler...');
-
         // Lấy thời gian từ env hoặc dùng mặc định 18:35
         const scraperHour = parseInt(process.env.XSMB_SCRAPER_HOUR) || 18;
         const scraperMinute = parseInt(process.env.XSMB_SCRAPER_MINUTE) || 35;
@@ -38,9 +36,11 @@ class XSMBSchedulerService {
         // Tính toán thời gian chạy tiếp theo
         this.calculateNextRun();
 
-        console.log('✅ XSMB Scheduler đã được khởi tạo');
-        console.log(`⏰ Thời gian chạy: ${scraperHour}:${String(scraperMinute).padStart(2, '0')} (${timezone})`);
-        console.log(`⏰ Thời gian chạy tiếp theo: ${this.nextRun}`);
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ XSMB Scheduler đã được khởi tạo');
+            console.log(`⏰ Thời gian chạy: ${scraperHour}:${String(scraperMinute).padStart(2, '0')} (${timezone})`);
+            console.log(`⏰ Thời gian chạy tiếp theo: ${this.nextRun}`);
+        }
 
         return this;
     }

@@ -1215,12 +1215,14 @@ exports.getPrivateChatsUnreadCounts = async (req, res) => {
     try {
         const userId = req.userId;
 
-        // Get all private chat rooms user is in
+        // Get all private chat rooms user is in (giới hạn để tránh hết bộ nhớ)
         const privateRooms = await ChatRoom.find({
             type: 'private',
             'participants.userId': userId,
             isActive: true
-        }).select('roomId participants');
+        })
+        .select('roomId participants')
+        .limit(100); // Giới hạn tối đa 100 phòng chat
 
         // Get unread count for each room
         const counts = {};

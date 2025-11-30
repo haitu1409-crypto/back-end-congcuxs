@@ -20,7 +20,9 @@ class LotterySocketService {
     init() {
         const mainIO = getIO();
         if (!mainIO) {
-            console.log('⏳ Socket.io chưa sẵn sàng, đợi 2 giây...');
+            if (process.env.NODE_ENV === 'development') {
+                console.log('⏳ Socket.io chưa sẵn sàng, đợi 2 giây...');
+            }
             setTimeout(() => this.init(), 2000);
             return;
         }
@@ -31,7 +33,9 @@ class LotterySocketService {
         this.lotteryNamespace = this.io.of('/lottery');
         this.setupSocketHandlers();
 
-        console.log('✅ Lottery Socket Service đã được khởi tạo (namespace: /lottery)');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Lottery Socket Service đã được khởi tạo (namespace: /lottery)');
+        }
     }
 
     /**

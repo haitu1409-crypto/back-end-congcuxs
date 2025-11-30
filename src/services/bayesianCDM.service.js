@@ -15,7 +15,7 @@ class BayesianCDMService {
             useClones: false // Tối ưu memory
         });
 
-        console.log('✅ BayesianCDMService initialized');
+        // Service initialized silently
     }
 
     /**

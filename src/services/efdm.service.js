@@ -16,7 +16,7 @@ class EFDMService {
             useClones: false // Tối ưu memory
         });
 
-        console.log('✅ EFDMService initialized');
+        // Service initialized silently
     }
 
     /**

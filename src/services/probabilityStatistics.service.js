@@ -7,7 +7,7 @@ const SoiCau = require('../models/soicau.model');
 
 class ProbabilityStatisticsService {
     constructor() {
-        console.log('✅ ProbabilityStatisticsService initialized');
+        // Service initialized silently
     }
 
     /**

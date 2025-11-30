@@ -14,7 +14,7 @@ class SoiCauScheduler {
         this.lastRun = null;
         this.nextRun = null;
 
-        console.log('✅ SoiCauScheduler initialized');
+        // Service initialized silently
     }
 
     /**

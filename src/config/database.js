@@ -31,9 +31,13 @@ class Database {
 
             this.connection = await mongoose.connect(mongoUri, options);
 
-            console.log('✅ Kết nối MongoDB thành công');
-            console.log(`📍 Database: ${this.connection.connection.name}`);
-            console.log(`🌐 Host: ${this.connection.connection.host}:${this.connection.connection.port}`);
+            if (process.env.NODE_ENV === 'development') {
+                console.log('✅ Kết nối MongoDB thành công');
+                console.log(`📍 Database: ${this.connection.connection.name}`);
+                console.log(`🌐 Host: ${this.connection.connection.host}:${this.connection.connection.port}`);
+            } else {
+                console.log('✅ Kết nối MongoDB thành công');
+            }
 
             // Xử lý các sự kiện connection
             mongoose.connection.on('error', (err) => {

@@ -17,7 +17,7 @@ class CollaborativeFilteringService {
         this.userItemMatrix = null;
         this.similarities = null;
 
-        console.log('✅ CollaborativeFilteringService initialized');
+        // Service initialized silently
     }
 
     /**

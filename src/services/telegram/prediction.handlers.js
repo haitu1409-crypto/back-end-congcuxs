@@ -996,16 +996,25 @@ async function buildOldScoresMap(chatId, normalizedDate) {
     }
 
     try {
-        const userIdsBeforeEval = await UserPrediction.find({
-            chatId: String(chatId),
-            normalizedDate
-        }).distinct('userId').lean();
+        // Sử dụng aggregation để lấy distinct userIds hiệu quả hơn
+        const userIdsBeforeEval = await UserPrediction.aggregate([
+            { $match: { chatId: String(chatId), normalizedDate } },
+            { $group: { _id: '$userId' } },
+            { $project: { _id: 0, userId: '$_id' } }
+        ]).allowDiskUse(true);
 
         if (userIdsBeforeEval.length > 0) {
+            const userIdStrings = userIdsBeforeEval.map(item => String(item.userId));
+            
+            // Giới hạn số lượng userIds để tránh query quá lớn
+            const limitedUserIds = userIdStrings.slice(0, 1000);
+            
             const oldScores = await PredictionScore.find({
                 chatId: String(chatId),
-                userId: { $in: userIdsBeforeEval.map(String) }
-            }).lean();
+                userId: { $in: limitedUserIds }
+            })
+            .select('userId points')
+            .lean();
 
             oldScores.forEach(score => {
                 oldScoresMap.set(String(score.userId), score.points || 0);
@@ -1047,9 +1056,16 @@ async function collectUserHitStats({ chatId, userIds = null, perUserLimit = MAX_
         query.userId = { $in: filteredUserIds };
     }
 
+    // Giới hạn số lượng documents để tránh hết bộ nhớ
+    // Tính toán limit dựa trên maxUsers và perUserLimit
+    const maxDocuments = filteredUserIds 
+        ? filteredUserIds.length * perUserLimit 
+        : (maxUsers || MAX_STATS_USERS) * perUserLimit * 2; // *2 để đảm bảo có đủ dữ liệu
+    
     const hits = await UserPrediction.find(query)
         .sort({ normalizedDate: -1, updatedAt: -1 })
         .select(['userId', 'username', 'displayName', 'normalizedDate', 'matchedLabel', 'matchedChamLabels', 'matchedNumbers'])
+        .limit(Math.min(maxDocuments, 10000)) // Giới hạn tối đa 10000 documents
         .lean();
 
     if (!hits.length) {

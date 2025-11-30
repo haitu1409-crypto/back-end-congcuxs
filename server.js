@@ -88,7 +88,7 @@ if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
     allowedOrigins.push('*');
 }
 
-console.log('🌐 Allowed CORS Origins:', allowedOrigins);
+// CORS origins configured silently
 
 app.use(cors({
     origin: (origin, callback) => {
@@ -518,11 +518,15 @@ const startServer = async () => {
 
         // Khởi động server ngay lập tức (không chờ MongoDB)
         const server = app.listen(PORT, '0.0.0.0', () => {
-            console.log(`🚀 Server đang chạy trên port ${PORT}`);
-            console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-            console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
-            console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
-            console.log(`✅ Root endpoint available at: http://localhost:${PORT}/`);
+            if (process.env.NODE_ENV === 'development') {
+                console.log(`🚀 Server đang chạy trên port ${PORT}`);
+                console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+                console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
+                console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
+                console.log(`✅ Root endpoint available at: http://localhost:${PORT}/`);
+            } else {
+                console.log(`🚀 Server đang chạy trên port ${PORT}`);
+            }
         });
 
         // Initialize Socket.io for real-time chat
@@ -584,17 +588,23 @@ const startServer = async () => {
         // Initialize Socket.io
         const { initializeSocket } = require('./src/services/socket.service');
         initializeSocket(server, redisClient);
-        console.log('✅ Socket.io initialized for real-time chat');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Socket.io initialized for real-time chat');
+        }
 
         // Initialize Lottery Socket Service (namespace /lottery)
         // Service sẽ tự động khởi tạo sau 1 giây để đảm bảo socket.io đã sẵn sàng
         require('./src/services/lotterySocket.service');
-        console.log('✅ Lottery Socket Service đang khởi tạo...');
+        if (process.env.NODE_ENV === 'development') {
+            console.log('✅ Lottery Socket Service đang khởi tạo...');
+        }
 
         // Kết nối MongoDB trong background (không block server start)
         const connectMongoDBInBackground = async () => {
             try {
-                console.log('🔄 Đang kết nối MongoDB trong background...');
+                if (process.env.NODE_ENV === 'development') {
+                    console.log('🔄 Đang kết nối MongoDB trong background...');
+                }
 
                 const connectWithTimeout = async () => {
                     const timeout = new Promise((_, reject) => {
@@ -606,7 +616,9 @@ const startServer = async () => {
                 };
 
                 await connectWithTimeout();
-                console.log('✅ Kết nối MongoDB thành công');
+                if (process.env.NODE_ENV === 'development') {
+                    console.log('✅ Kết nối MongoDB thành công');
+                }
 
             } catch (error) {
                 console.warn('⚠️ MongoDB connection failed:', error.message);

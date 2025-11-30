@@ -218,13 +218,14 @@ const initializeSocket = (server, redis) => {
             // Join user to their rooms first
             await joinUserRooms(socket, userId, userRole);
 
-            // Get all rooms user is in
+            // Get all rooms user is in (giới hạn để tránh hết bộ nhớ)
             const groupchatRoom = await ChatRoom.getGroupchatRoom();
             const privateRooms = await ChatRoom.find({
                 type: 'private',
                 'participants.userId': userId,
                 isActive: true
-            });
+            })
+            .limit(100); // Giới hạn tối đa 100 phòng chat
 
             // Broadcast user online to all rooms user is in
             const allRooms = [groupchatRoom, ...privateRooms].filter(Boolean);
@@ -325,7 +326,9 @@ const initializeSocket = (server, redis) => {
         await cleanupOfflineUsers();
     }, 60000);
 
-    console.log('✅ Socket.io initialized');
+    if (process.env.NODE_ENV === 'development') {
+        console.log('✅ Socket.io initialized');
+    }
     return io;
 };
 
