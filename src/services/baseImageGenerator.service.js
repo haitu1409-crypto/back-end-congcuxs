@@ -47,7 +47,7 @@ class BaseImageGeneratorService {
                     '--disable-images', // Tối ưu: không load images
                     '--disable-javascript', // Tối ưu: không cần JS
                     '--disable-plugins', // Tối ưu: không cần plugins
-                    '--disable-remote-fonts', // Tối ưu: không load remote fonts
+                    // Bỏ --disable-remote-fonts để cho phép load Google Fonts cho tiếng Việt
                     '--disable-font-subpixel-positioning', // Tối ưu: render font nhanh hơn
                     '--disable-lcd-text', // Tối ưu: render text nhanh hơn
                     '--memory-pressure-off', // Tối ưu: tắt memory pressure
@@ -131,12 +131,20 @@ class BaseImageGeneratorService {
             await page.setJavaScriptEnabled(false);
             
             // Block các resource không cần thiết để tăng tốc
+            // NHƯNG cho phép load font từ Google Fonts để hỗ trợ tiếng Việt
             await page.setRequestInterception(true);
             page.on('request', (req) => {
                 const resourceType = req.resourceType();
                 const url = req.url();
-                // Block images, fonts, media, websocket nhưng giữ CSS và HTML
-                if (['image', 'font', 'media', 'websocket', 'stylesheet'].includes(resourceType) || 
+                
+                // Cho phép load font từ Google Fonts
+                const isGoogleFonts = url.includes('fonts.googleapis.com') || 
+                                     url.includes('fonts.gstatic.com') ||
+                                     url.includes('googleapis.com/css');
+                
+                // Block images, media, websocket nhưng giữ CSS, HTML và Google Fonts
+                if (['image', 'media', 'websocket'].includes(resourceType) || 
+                    (!isGoogleFonts && resourceType === 'font') || // Chặn font khác nhưng cho phép Google Fonts
                     url.includes('google-analytics') || 
                     url.includes('facebook') ||
                     url.includes('doubleclick')) {
@@ -153,19 +161,22 @@ class BaseImageGeneratorService {
                 deviceScaleFactor
             });
 
-            // Load HTML với timeout ngắn hơn và không chờ network
+            // Load HTML và đợi font load để đảm bảo tiếng Việt hiển thị đúng
             await page.setContent(html, {
-                waitUntil: 'domcontentloaded', // Nhanh nhất
-                timeout
+                waitUntil: 'networkidle0', // Đợi tất cả network requests (bao gồm font) hoàn thành
+                timeout: timeout + 3000 // Tăng timeout để đợi font load
             });
 
-            // Đợi box xuất hiện thay vì fixed timeout (nhanh hơn)
+            // Đợi box xuất hiện
             try {
                 await page.waitForSelector('.box', { timeout: 2000 });
             } catch (e) {
                 // Nếu không tìm thấy, đợi một chút rồi thử lại
                 await new Promise(resolve => setTimeout(resolve, waitTime));
             }
+            
+            // Đợi thêm một chút để đảm bảo font đã render xong
+            await new Promise(resolve => setTimeout(resolve, 500));
 
             // Lấy thông tin box để clip
             const boxInfo = await page.evaluate(() => {
