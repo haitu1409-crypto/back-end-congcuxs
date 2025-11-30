@@ -1666,8 +1666,22 @@ function createPredictionHandlers({ xsmbModel }) {
     }
 
     async function handleSubmission(ctx, args) {
-        const chatId = ctx.chat.id;
+        const chatId = ctx.chat?.id;
         const userId = ctx.from?.id;
+        
+        // Log để debug chatId
+        console.log(`[handleSubmission] ctx.chat:`, {
+            id: ctx.chat?.id,
+            type: ctx.chat?.type,
+            title: ctx.chat?.title,
+            username: ctx.chat?.username
+        });
+        
+        if (!chatId) {
+            console.error('[handleSubmission] ❌ Không xác định được chatId từ ctx.chat');
+            return replyErrorAndDeleteUserPredictionMessage(ctx, '<b>LỖI HỆ THỐNG: Không xác định được nhóm chat.</b>', { parse_mode: 'HTML' });
+        }
+        
         if (!userId) {
             return replyErrorAndDeleteUserPredictionMessage(ctx, '<b>LỖI HỆ THỐNG: Không xác định được người dùng.</b>', { parse_mode: 'HTML' });
         }
@@ -1704,19 +1718,54 @@ function createPredictionHandlers({ xsmbModel }) {
             const { username, displayName } = getUserIdentifiers(ctx);
 
             // Lưu dự đoán cho tất cả các ngày trong khoảng
+            const chatIdString = String(chatId);
+            const userIdString = String(userId);
+            
+            console.log(`[handleSubmission] Đang lưu dự đoán với chatId=${chatIdString} (original: ${chatId}, type: ${typeof chatId}), userId=${userIdString}`);
+            
             for (let i = 0; i < normalizedDates.length; i++) {
                 const normalizedDate = normalizedDates[i];
                 const drawDate = drawDates[i];
 
-                await savePrediction({
-                    chatId: String(chatId),
-                    userId: String(userId),
-                    username,
-                    displayName,
-                    drawDate,
-                    numbers,
-                    groups
-                });
+                try {
+                    const savedPrediction = await savePrediction({
+                        chatId: chatIdString,
+                        userId: userIdString,
+                        username,
+                        displayName,
+                        drawDate,
+                        numbers,
+                        groups
+                    });
+
+                    // Kiểm tra xem dữ liệu đã được lưu thành công chưa
+                    if (!savedPrediction) {
+                        console.error(`[Prediction] Lỗi: savePrediction trả về null/undefined cho chatId=${chatIdString}, userId=${userIdString}, normalizedDate=${normalizedDate}`);
+                        throw new Error('LỖI HỆ THỐNG: Không thể lưu dự đoán vào database.');
+                    }
+
+                    // Verify: Kiểm tra lại xem dữ liệu có thực sự trong database không
+                    const verifyPrediction = await UserPrediction.findOne({ 
+                        chatId: chatIdString, 
+                        userId: userIdString, 
+                        normalizedDate 
+                    }).lean();
+                    
+                    if (!verifyPrediction) {
+                        console.error(`[Prediction] ❌ CẢNH BÁO: Dữ liệu không tìm thấy sau khi lưu! chatId=${chatIdString}, userId=${userIdString}, normalizedDate=${normalizedDate}`);
+                    } else {
+                        // Kiểm tra xem chatId được lưu có khớp với chatId hiện tại không
+                        const savedChatId = String(verifyPrediction.chatId);
+                        if (savedChatId !== chatIdString) {
+                            console.error(`[Prediction] ⚠️ CẢNH BÁO: chatId được lưu (${savedChatId}) không khớp với chatId hiện tại (${chatIdString})!`);
+                        }
+                        console.log(`[Prediction] ✅ Đã lưu và verify thành công: chatId=${chatIdString}, userId=${userIdString}, normalizedDate=${normalizedDate}, _id=${savedPrediction._id}, saved_chatId=${verifyPrediction.chatId}`);
+                    }
+                } catch (saveError) {
+                    console.error(`[Prediction] ❌ Lỗi khi lưu dự đoán vào database:`, saveError);
+                    // Re-throw để được xử lý bởi catch block bên ngoài
+                    throw saveError;
+                }
             }
 
             const userMention = formatUserMention({
@@ -1838,16 +1887,39 @@ function createPredictionHandlers({ xsmbModel }) {
     }
 
     async function handleList(ctx, args) {
-        const chatId = ctx.chat.id;
+        const chatId = ctx.chat?.id;
         const normalizedDate = resolveNormalizedDate(args[0]);
+        
+        if (!chatId) {
+            console.error('[handleList] ❌ Không xác định được chatId từ ctx.chat');
+            return ctx.reply(
+                `<b>LỖI HỆ THỐNG: Không xác định được nhóm chat.</b>`,
+                { parse_mode: 'HTML' }
+            );
+        }
+        
         if (!normalizedDate) {
             return ctx.reply(
                 `<b>SAI CÚ PHÁP: Không xác định được ngày cần xem.</b>`,
                 { parse_mode: 'HTML' }
             );
         }
+        
+        const chatIdString = String(chatId);
+        console.log(`[handleList] Query với chatId=${chatIdString} (original: ${chatId}, type: ${typeof chatId}), normalizedDate=${normalizedDate}`);
+        
+        // Lấy danh sách các group được phép từ environment variable
+        const allowedChatIdsEnv = process.env.TELEGRAM_ALLOWED_CHAT_IDS;
+        const allowedChatIds = allowedChatIdsEnv 
+            ? allowedChatIdsEnv.split(',').map(id => String(id.trim())).filter(id => id.length > 0)
+            : null;
+        
         try {
-            const predictions = await listPredictions({ chatId: String(chatId), normalizedDate });
+            const predictions = await listPredictions({ 
+                chatId: chatIdString, 
+                normalizedDate,
+                allowedChatIds 
+            });
             if (!predictions.length) {
                 return ctx.reply(
                     `<b>ℹ️ THÔNG BÁO</b>\n\n<i>Chưa có dự đoán nào cho ngày này.</i>`,

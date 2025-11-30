@@ -267,7 +267,11 @@ function determinePredictionDate(now = new Date()) {
  * @returns {Promise<{allowed: boolean, reason?: string, currentCount?: number}>}
  */
 async function checkPredictionAllowed(chatId, userId, normalizedDate) {
-    const existing = await Prediction.findOne({ chatId, userId, normalizedDate }).lean();
+    // Đảm bảo chatId và userId luôn là string
+    const chatIdString = String(chatId);
+    const userIdString = String(userId);
+    
+    const existing = await Prediction.findOne({ chatId: chatIdString, userId: userIdString, normalizedDate }).lean();
     
     if (!existing) {
         // Chưa có dự đoán, cho phép tạo mới
@@ -287,6 +291,10 @@ async function checkPredictionAllowed(chatId, userId, normalizedDate) {
 }
 
 async function savePrediction({ chatId, userId, username, displayName, drawDate, numbers, groups = [], skipTimeCheck = false, skipUpdateCountCheck = false }) {
+    // Đảm bảo chatId và userId luôn là string để consistency với database
+    const chatIdString = String(chatId);
+    const userIdString = String(userId);
+    
     const normalizedDate = formatDateKey(drawDate);
     if (!normalizedDate) {
         throw new Error('Không xác định được ngày quay để lưu dự đoán.');
@@ -328,53 +336,145 @@ async function savePrediction({ chatId, userId, username, displayName, drawDate,
 
     // Kiểm tra số lần thay đổi (nếu không skip)
     if (!skipUpdateCountCheck) {
-        const checkResult = await checkPredictionAllowed(chatId, userId, normalizedDate);
+        const checkResult = await checkPredictionAllowed(chatIdString, userIdString, normalizedDate);
         if (!checkResult.allowed) {
             throw new Error(checkResult.reason);
         }
     }
 
     // Tìm dự đoán hiện tại để lấy updateCount
-    const existing = await Prediction.findOne({ chatId, userId, normalizedDate }).lean();
+    const existing = await Prediction.findOne({ chatId: chatIdString, userId: userIdString, normalizedDate }).lean();
     const currentUpdateCount = existing?.updateCount || 0;
     const isNewPrediction = !existing;
 
     // Tăng updateCount nếu đã có dự đoán trước đó (không phải lần đầu tạo)
     const newUpdateCount = isNewPrediction ? 0 : currentUpdateCount + 1;
 
-    return Prediction.findOneAndUpdate(
-        { chatId, userId, normalizedDate },
-        {
-            chatId,
-            userId,
-            username,
-            displayName: safeDisplayName,
-            drawDate,
-            normalizedDate,
-            numbers: safeNumbers,
-            groups: safeGroups,
-            matchedNumbers: [],
-            status: 'pending',
-            resultNotified: false,
-            updateCount: newUpdateCount
-        },
-        { upsert: true, new: true, setDefaultsOnInsert: true }
-    );
+    const updateData = {
+        chatId: chatIdString,
+        userId: userIdString,
+        username,
+        displayName: safeDisplayName,
+        drawDate,
+        normalizedDate,
+        numbers: safeNumbers,
+        groups: safeGroups,
+        matchedNumbers: [],
+        status: 'pending',
+        resultNotified: false,
+        updateCount: newUpdateCount
+    };
+
+    console.log(`[savePrediction] Đang lưu dự đoán: chatId=${chatIdString} (original: ${chatId}, type: ${typeof chatId}), userId=${userIdString}, normalizedDate=${normalizedDate}, isNew=${isNewPrediction}, updateCount=${newUpdateCount}`);
+
+    try {
+        const result = await Prediction.findOneAndUpdate(
+            { chatId: chatIdString, userId: userIdString, normalizedDate },
+            updateData,
+            { upsert: true, new: true, setDefaultsOnInsert: true }
+        );
+
+        if (!result) {
+            console.error(`[savePrediction] ❌ Lỗi: findOneAndUpdate trả về null cho chatId=${chatIdString}, userId=${userIdString}, normalizedDate=${normalizedDate}`);
+            throw new Error('Không thể lưu dự đoán vào database: findOneAndUpdate trả về null');
+        }
+
+        console.log(`[savePrediction] ✅ Đã lưu thành công: _id=${result._id}, chatId=${chatIdString}, userId=${userIdString}, normalizedDate=${normalizedDate}`);
+        return result;
+    } catch (error) {
+        console.error(`[savePrediction] ❌ Lỗi database khi lưu dự đoán:`, error);
+        throw error;
+    }
 }
 
-async function listPredictions({ chatId, normalizedDate }) {
-    return Prediction.find({ chatId, normalizedDate })
-        .sort({ createdAt: 1 })
-        .lean();
+async function listPredictions({ chatId, normalizedDate, allowedChatIds = null }) {
+    try {
+        // Đảm bảo chatId luôn là string để match với dữ liệu đã lưu
+        const chatIdString = String(chatId);
+        
+        console.log(`[listPredictions] Query: chatId=${chatIdString} (original type: ${typeof chatId}), normalizedDate=${normalizedDate}`);
+        
+        // Kiểm tra input
+        if (!chatIdString || !normalizedDate) {
+            console.error(`[listPredictions] ❌ Lỗi: chatId hoặc normalizedDate không hợp lệ. chatId=${chatIdString}, normalizedDate=${normalizedDate}`);
+            return [];
+        }
+        
+        // Query với chatId đã normalize
+        const query = { chatId: chatIdString, normalizedDate };
+        let predictions = await Prediction.find(query)
+            .sort({ createdAt: 1 })
+            .lean();
+        
+        console.log(`[listPredictions] Tìm thấy ${predictions.length} dự đoán cho chatId=${chatIdString}, normalizedDate=${normalizedDate}`);
+        
+        // Nếu tìm thấy dữ liệu từ group hiện tại, trả về ngay
+        if (predictions.length > 0) {
+            console.log(`[listPredictions] ✅ Trả về ${predictions.length} dự đoán từ group hiện tại: ${chatIdString}`);
+            return predictions;
+        }
+        
+        // Nếu không tìm thấy, thử query với format khác (backward compatibility)
+        // Thử query với chatId dạng number (nếu chatId là string số)
+        const chatIdNumber = Number(chatId);
+        if (!isNaN(chatIdNumber) && String(chatIdNumber) !== chatIdString) {
+            console.log(`[listPredictions] Thử query với chatId dạng number: ${chatIdNumber}`);
+            const altQuery = { chatId: String(chatIdNumber), normalizedDate };
+            const altPredictions = await Prediction.find(altQuery)
+                .sort({ createdAt: 1 })
+                .lean();
+            if (altPredictions.length > 0) {
+                console.log(`[listPredictions] ✅ Tìm thấy ${altPredictions.length} dự đoán với format thay thế`);
+                return altPredictions;
+            }
+        }
+        
+        // Nếu vẫn không tìm thấy, chỉ trả về mảng rỗng
+        // KHÔNG query từ các group khác để tránh hiển thị dữ liệu từ group khác
+        console.log(`[listPredictions] ⚠️ Không tìm thấy dự đoán nào cho chatId=${chatIdString}, normalizedDate=${normalizedDate}`);
+        
+        // Debug: Kiểm tra xem có dữ liệu nào trong database không (chỉ để log, không trả về)
+        try {
+            const allCount = await Prediction.countDocuments({ normalizedDate });
+            if (allCount > 0) {
+                const allPredictions = await Prediction.find({ normalizedDate }).select('chatId userId displayName').lean();
+                const uniqueChatIds = [...new Set(allPredictions.map(p => p.chatId))];
+                console.log(`[listPredictions] DEBUG: Tổng số dự đoán trong database cho ngày ${normalizedDate}: ${allCount}`);
+                console.log(`[listPredictions] DEBUG: Tất cả chatId có dữ liệu cho ngày ${normalizedDate}:`, uniqueChatIds);
+                console.log(`[listPredictions] DEBUG: Query chatId: "${chatIdString}" (type: ${typeof chatIdString})`);
+                
+                if (!uniqueChatIds.includes(chatIdString)) {
+                    console.log(`[listPredictions] ⚠️ CẢNH BÁO: Group hiện tại (${chatIdString}) không có dữ liệu, nhưng có dữ liệu từ các group khác: ${uniqueChatIds.join(', ')}`);
+                    console.log(`[listPredictions] ⚠️ Chỉ trả về dữ liệu từ group hiện tại, không trả về dữ liệu từ group khác.`);
+                }
+            }
+        } catch (debugError) {
+            console.error(`[listPredictions] ❌ Lỗi khi debug:`, debugError);
+            // Không throw, chỉ log lỗi
+        }
+        
+        // Trả về mảng rỗng vì không tìm thấy dữ liệu từ group hiện tại
+        return [];
+    } catch (error) {
+        console.error(`[listPredictions] ❌ Lỗi khi query dự đoán:`, error);
+        console.error(`[listPredictions] ❌ Stack trace:`, error.stack);
+        // Trả về mảng rỗng thay vì throw error để không làm crash server
+        return [];
+    }
 }
 
 async function listResults({ chatId, normalizedDate }) {
-    return Prediction.find({ chatId, normalizedDate })
+    // Đảm bảo chatId luôn là string để match với dữ liệu đã lưu
+    const chatIdString = String(chatId);
+    return Prediction.find({ chatId: chatIdString, normalizedDate })
         .sort({ createdAt: 1 })
         .lean();
 }
 
 async function evaluatePredictions({ chatId, doc }) {
+    // Đảm bảo chatId luôn là string
+    const chatIdString = String(chatId);
+    
     const normalizedDate = formatDateKey(doc?.drawDate);
     if (!normalizedDate) {
         return null;
@@ -385,7 +485,7 @@ async function evaluatePredictions({ chatId, doc }) {
         return null;
     }
 
-    const predictions = await Prediction.find({ chatId, normalizedDate }).lean();
+    const predictions = await Prediction.find({ chatId: chatIdString, normalizedDate }).lean();
     if (!predictions.length) {
         return null;
     }
@@ -556,12 +656,14 @@ async function evaluatePredictions({ chatId, doc }) {
 }
 
 async function hasNotifiedResults(chatId, normalizedDate) {
-    return Prediction.exists({ chatId, normalizedDate, resultNotified: true });
+    const chatIdString = String(chatId);
+    return Prediction.exists({ chatId: chatIdString, normalizedDate, resultNotified: true });
 }
 
 async function markResultsNotified(chatId, normalizedDate) {
+    const chatIdString = String(chatId);
     await Prediction.updateMany(
-        { chatId, normalizedDate },
+        { chatId: chatIdString, normalizedDate },
         { $set: { resultNotified: true } }
     );
 }
