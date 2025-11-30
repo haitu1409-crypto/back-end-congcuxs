@@ -50,6 +50,7 @@ app.use(helmet({
 const defaultOrigins = [
     'https://www.taodandewukong.pro',
     'https://taodandewukong.pro',
+    'https://api1.taodandewukong.pro', // API subdomain
     'http://localhost:3000',
     'http://localhost:3001',
     'http://localhost:3002',
@@ -62,20 +63,21 @@ let allowedOrigins = process.env.FRONTEND_URL
     : defaultOrigins;
 
 // Đảm bảo luôn có cả www và non-www cho taodandewukong.pro
+// Cho phép tất cả subdomain của taodandewukong.pro (www, api1, etc.)
 const ensureTaodandewukongOrigins = (origins) => {
     const hasWww = origins.some(o => o.includes('www.taodandewukong.pro'));
-    const hasNonWww = origins.some(o => o.includes('taodandewukong.pro') && !o.includes('www.'));
+    const hasNonWww = origins.some(o => o.includes('taodandewukong.pro') && !o.includes('www.') && !o.includes('api1.'));
 
     const result = [...origins];
 
-    if (!hasWww && origins.some(o => o.includes('taodandewukong.pro'))) {
+    // Đảm bảo có www.taodandewukong.pro (frontend)
+    if (!hasWww) {
         result.push('https://www.taodandewukong.pro');
-        console.log('🔧 Added www.taodandewukong.pro to allowed origins');
     }
 
-    if (!hasNonWww && origins.some(o => o.includes('www.taodandewukong.pro'))) {
+    // Đảm bảo có taodandewukong.pro (non-www)
+    if (!hasNonWww) {
         result.push('https://taodandewukong.pro');
-        console.log('🔧 Added taodandewukong.pro (non-www) to allowed origins');
     }
 
     return result;
@@ -95,13 +97,8 @@ app.use(cors({
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
 
-        console.log('🔍 Request Origin:', origin);
-        console.log('✅ Checking against allowed origins:', allowedOrigins);
-        console.log('🔧 Environment:', process.env.NODE_ENV);
-
         // Check exact match or wildcard
         if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-            console.log('✅ CORS allowed for:', origin);
             return callback(null, true);
         }
 
@@ -113,31 +110,30 @@ app.use(cors({
 
                 // Exact match
                 if (requestDomain === domain) {
-                    console.log('✅ Exact domain match:', requestDomain, '===', domain);
                     return true;
                 }
 
                 // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
                 if (requestDomain.endsWith('.' + domain)) {
-                    console.log('✅ Subdomain match (request is subdomain of allowed):', requestDomain, 'ends with', '.' + domain);
                     return true;
                 }
 
                 // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
                 if (domain.endsWith('.' + requestDomain)) {
-                    console.log('✅ Reverse subdomain match (allowed is subdomain of request):', domain, 'ends with', '.' + requestDomain);
                     return true;
                 }
 
                 // Check if both are subdomains of the same root domain
+                // This allows www.taodandewukong.pro to call api1.taodandewukong.pro
                 const requestParts = requestDomain.split('.');
                 const domainParts = domain.split('.');
 
                 if (requestParts.length >= 2 && domainParts.length >= 2) {
-                    const requestRoot = requestParts.slice(-2).join('.');
-                    const domainRoot = domainParts.slice(-2).join('.');
-                    if (requestRoot === domainRoot) {
-                        console.log('✅ Same root domain match:', requestRoot, '===', domainRoot);
+                    const requestRoot = requestParts.slice(-2).join('.'); // taodandewukong.pro
+                    const domainRoot = domainParts.slice(-2).join('.'); // taodandewukong.pro
+                    
+                    // Match if same root domain (www.taodandewukong.pro <-> api1.taodandewukong.pro)
+                    if (requestRoot === domainRoot && requestRoot === 'taodandewukong.pro') {
                         return true;
                     }
                 }
@@ -146,13 +142,15 @@ app.use(cors({
         });
 
         if (isSubdomainMatch) {
-            console.log('✅ CORS allowed for subdomain:', origin);
             return callback(null, true);
         }
 
-        console.log('❌ CORS blocked for:', origin);
-        console.log('🔍 Debug - Request domain parts:', origin.replace(/^https?:\/\//, '').split('.'));
-        console.log('🔍 Debug - Allowed origins domain parts:', allowedOrigins.map(o => o.replace(/^https?:\/\//, '').split('.')));
+        // Log CORS error only in development
+        if (process.env.NODE_ENV === 'development') {
+            console.log('❌ CORS blocked for:', origin);
+            console.log('🔍 Debug - Request domain parts:', origin.replace(/^https?:\/\//, '').split('.'));
+            console.log('🔍 Debug - Allowed origins domain parts:', allowedOrigins.map(o => o.replace(/^https?:\/\//, '').split('.')));
+        }
         return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
