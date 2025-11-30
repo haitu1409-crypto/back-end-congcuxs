@@ -477,11 +477,20 @@ class XSMBImageGeneratorService {
             const html = this.generateHTMLTemplate(doc);
 
             // Disable các resource không cần thiết để tăng tốc (CSS đã inline rồi)
+            // NHƯNG cho phép load font từ Google Fonts để hỗ trợ tiếng Việt
             await page.setRequestInterception(true);
             page.on('request', (req) => {
                 const resourceType = req.resourceType();
-                // Chỉ block image, font, media - không block stylesheet vì có thể cần
-                if (['image', 'font', 'media'].includes(resourceType)) {
+                const url = req.url();
+
+                // Cho phép load font từ Google Fonts
+                const isGoogleFonts = url.includes('fonts.googleapis.com') ||
+                    url.includes('fonts.gstatic.com') ||
+                    url.includes('googleapis.com/css');
+
+                // Chỉ block image, media - cho phép Google Fonts
+                if (['image', 'media'].includes(resourceType) ||
+                    (!isGoogleFonts && resourceType === 'font')) { // Chặn font khác nhưng cho phép Google Fonts
                     req.abort();
                 } else {
                     req.continue();
@@ -495,17 +504,17 @@ class XSMBImageGeneratorService {
                 deviceScaleFactor: 2
             });
 
-            // Set content và chờ render - dùng 'load' thay vì 'networkidle0' để nhanh hơn
+            // Set content và đợi font load để đảm bảo tiếng Việt hiển thị đúng
             await page.setContent(html, {
-                waitUntil: 'load',
-                timeout: 15000
+                waitUntil: 'networkidle0', // Đợi tất cả network requests (bao gồm font) hoàn thành
+                timeout: 20000 // Tăng timeout để đợi font load
             });
 
-            // Chờ bảng xuất hiện thay vì fixed timeout
-            await page.waitForSelector('.ketqua', { timeout: 5000 }).catch(() => {});
-            
-            // Chờ render CSS ngắn hơn
-            await new Promise(resolve => setTimeout(resolve, 300));
+            // Chờ bảng xuất hiện
+            await page.waitForSelector('.ketqua', { timeout: 5000 }).catch(() => { });
+
+            // Đợi thêm một chút để đảm bảo font đã render xong
+            await new Promise(resolve => setTimeout(resolve, 500));
 
             // Lấy vị trí và kích thước thực tế của bảng
             const tableInfo = await page.evaluate(() => {
@@ -519,10 +528,10 @@ class XSMBImageGeneratorService {
                         height: 1500
                     };
                 }
-                
+
                 const tableRect = table.getBoundingClientRect();
                 const containerRect = container.getBoundingClientRect();
-                
+
                 // Tính vị trí relative đến viewport
                 const padding = 20;
                 return {
