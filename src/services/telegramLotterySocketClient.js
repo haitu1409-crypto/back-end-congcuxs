@@ -14,35 +14,16 @@ class TelegramLotterySocketClient {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
         this.liveData = {}; // Lưu trữ dữ liệu hiện tại
-        this.lastMaxAttemptTime = null; // Thời gian đạt max attempts lần cuối
     }
 
     /**
      * Kết nối đến server
      */
     connect() {
-        // Kiểm tra nếu đã đạt max attempts, không thử kết nối nữa
-        if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-            // Cho phép reset sau 1 giờ để thử lại
-            const oneHourAgo = Date.now() - (60 * 60 * 1000);
-            if (this.lastMaxAttemptTime && (Date.now() - this.lastMaxAttemptTime) < (60 * 60 * 1000)) {
-                return null; // Vẫn trong thời gian chờ
-            }
-            // Reset sau 1 giờ
-            this.reconnectAttempts = 0;
-            this.lastMaxAttemptTime = null;
-        }
-
         if (this.socket?.connected) {
             // Nếu đã kết nối, yêu cầu dữ liệu mới nhất
             this.socket.emit('lottery:get-latest');
             return this.socket;
-        }
-
-        // Kiểm tra nếu WebSocket bị disable
-        if (process.env.DISABLE_TELEGRAM_LOTTERY_SOCKET === 'true') {
-            console.log('[TelegramLotterySocket] ⚠️ WebSocket đã bị tắt trong môi trường này');
-            return null;
         }
 
         // Get socket URL từ env hoặc default
@@ -57,18 +38,7 @@ class TelegramLotterySocketClient {
             SOCKET_URL = SOCKET_URL.replace('wss://', 'https://');
         }
 
-        // Kiểm tra nếu đang cố kết nối đến chính server này (tránh loop)
-        const currentPort = process.env.PORT || 5000;
-        const isLocalhost = SOCKET_URL.includes('localhost') || SOCKET_URL.includes('127.0.0.1');
-        if (isLocalhost && !process.env.ALLOW_LOCAL_SOCKET_CONNECTION) {
-            console.log('[TelegramLotterySocket] ⚠️ Bỏ qua kết nối localhost để tránh loop (set ALLOW_LOCAL_SOCKET_CONNECTION=true nếu cần)');
-            return null;
-        }
-
-        // Chỉ log khi bắt đầu kết nối, không log mỗi lần retry
-        if (this.reconnectAttempts === 0) {
-            console.log('[TelegramLotterySocket] 🔌 Đang kết nối đến lottery socket server:', SOCKET_URL);
-        }
+        console.log('[TelegramLotterySocket] 🔌 Connecting to lottery socket server:', SOCKET_URL);
 
         // Connect to /lottery namespace (không cần auth)
         this.socket = io(`${SOCKET_URL}/lottery`, {
@@ -99,38 +69,20 @@ class TelegramLotterySocketClient {
         });
 
         this.socket.on('disconnect', (reason) => {
-            // Chỉ log nếu không phải do đạt max attempts (để tránh spam)
-            if (this.reconnectAttempts < this.maxReconnectAttempts) {
-                console.log('[TelegramLotterySocket] ❌ Đã ngắt kết nối:', reason);
-            }
+            console.log('[TelegramLotterySocket] ❌ Disconnected:', reason);
             this.isConnected = false;
             this.notifyListeners('disconnected', reason);
         });
 
         this.socket.on('connect_error', (error) => {
+            console.error('[TelegramLotterySocket] ❌ Connection error:', error.message);
             this.reconnectAttempts++;
 
             if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-                // Chỉ log một lần khi đạt max attempts để tránh spam log
-                if (this.reconnectAttempts === this.maxReconnectAttempts) {
-                    console.error('[TelegramLotterySocket] 🔴 Đã đạt đến số lần kết nối lại tối đa');
-                    console.error('[TelegramLotterySocket] ⚠️ WebSocket không khả dụng, Telegram bot sẽ hoạt động bình thường nhưng không nhận kết quả realtime');
-                    this.lastMaxAttemptTime = Date.now();
-                }
-                // Dừng reconnect để tránh spam
-                if (this.socket) {
-                    this.socket.disconnect();
-                    this.socket = null;
-                }
-                this.isConnected = false;
+                console.error('[TelegramLotterySocket] 🔴 Max reconnection attempts reached');
                 this.notifyListeners('connection_error', error);
             } else {
-                // Chỉ log mỗi 5 lần để tránh spam, và không log chi tiết error
-                if (this.reconnectAttempts % 5 === 0 || this.reconnectAttempts <= 3) {
-                    const errorMsg = error?.message || 'lỗi websocket';
-                    console.log(`[TelegramLotterySocket] ❌ Lỗi kết nối: ${errorMsg}`);
-                    console.log(`[TelegramLotterySocket] 🔄 Đang thử kết nối lại (${this.reconnectAttempts}/${this.maxReconnectAttempts})`);
-                }
+                console.log(`[TelegramLotterySocket] 🔄 Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
             }
         });
 

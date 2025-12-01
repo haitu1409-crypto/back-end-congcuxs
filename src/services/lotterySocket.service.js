@@ -20,9 +20,7 @@ class LotterySocketService {
     init() {
         const mainIO = getIO();
         if (!mainIO) {
-            if (process.env.NODE_ENV === 'development') {
-                console.log('⏳ Socket.io chưa sẵn sàng, đợi 2 giây...');
-            }
+            console.log('⏳ Socket.io chưa sẵn sàng, đợi 2 giây...');
             setTimeout(() => this.init(), 2000);
             return;
         }
@@ -33,9 +31,7 @@ class LotterySocketService {
         this.lotteryNamespace = this.io.of('/lottery');
         this.setupSocketHandlers();
 
-        if (process.env.NODE_ENV === 'development') {
-            console.log('✅ Lottery Socket Service đã được khởi tạo (namespace: /lottery)');
-        }
+        console.log('✅ Lottery Socket Service đã được khởi tạo (namespace: /lottery)');
     }
 
     /**
@@ -119,12 +115,16 @@ class LotterySocketService {
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
-        // Tối ưu payload: chỉ gửi dữ liệu cần thiết
-        // Frontend chỉ cần: prizeType, prizeData, timestamp
         const data = {
             prizeType,
             prizeData,
-            timestamp: Date.now()
+            drawDate: fullResult?.drawDate || today,
+            tentinh: fullResult?.tentinh || 'Miền Bắc',
+            tinh: fullResult?.tinh || 'MB',
+            year: fullResult?.year || today.getFullYear(),
+            month: fullResult?.month || (today.getMonth() + 1),
+            timestamp: Date.now(),
+            [prizeType]: prizeData
         };
 
         this.lotteryNamespace.to(roomName).emit('lottery:prize-update', data);

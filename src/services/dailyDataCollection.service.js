@@ -24,7 +24,7 @@ class DailyDataCollectionService {
             useClones: false // Tối ưu memory
         });
 
-        // Service initialized silently
+        console.log('✅ DailyDataCollectionService initialized with cache');
     }
 
     /**

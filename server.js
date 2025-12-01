@@ -28,12 +28,10 @@ const ultraAdvancedSoiCauRoutes = require('./src/routes/ultraAdvancedSoiCau.rout
 const authRoutes = require('./src/routes/auth.routes');
 const chatRoutes = require('./src/routes/chat.routes');
 const adminRoutes = require('./src/routes/admin.routes');
-const thongKeImageRoutes = require('./src/routes/thongKeImage.routes');
 const initTelegramBot = require('./src/services/telegramBot.service');
 
 const database = require('./src/config/database');
 const xsmbScheduler = require('./src/services/xsmbScheduler.service');
-const thongKeNhanhScheduler = require('./src/services/thongKeNhanhScheduler.service');
 // Keep-alive middleware removed for Pro version
 
 const app = express();
@@ -47,110 +45,76 @@ app.use(helmet({
 }));
 
 // CORS configuration
-const defaultOrigins = [
-    'https://www.taodandewukong.pro',
-    'https://taodandewukong.pro',
-    'https://api1.taodandewukong.pro', // API subdomain
-    'http://localhost:3000',
-    'http://localhost:3001',
-    'http://localhost:3002',
-    'http://localhost:3003',
-    'http://localhost:3004'
-];
-
-let allowedOrigins = process.env.FRONTEND_URL
+const allowedOrigins = process.env.FRONTEND_URL
     ? process.env.FRONTEND_URL.split(',').map(origin => origin.trim())
-    : defaultOrigins;
-
-// Đảm bảo luôn có cả www và non-www cho taodandewukong.pro
-// Cho phép tất cả subdomain của taodandewukong.pro (www, api1, etc.)
-const ensureTaodandewukongOrigins = (origins) => {
-    const hasWww = origins.some(o => o.includes('www.taodandewukong.pro'));
-    const hasNonWww = origins.some(o => o.includes('taodandewukong.pro') && !o.includes('www.') && !o.includes('api1.'));
-
-    const result = [...origins];
-
-    // Đảm bảo có www.taodandewukong.pro (frontend)
-    if (!hasWww) {
-        result.push('https://www.taodandewukong.pro');
-    }
-
-    // Đảm bảo có taodandewukong.pro (non-www)
-    if (!hasNonWww) {
-        result.push('https://taodandewukong.pro');
-    }
-
-    return result;
-};
-
-allowedOrigins = ensureTaodandewukongOrigins(allowedOrigins);
+    : [
+        'https://www.taodandewukong.pro',
+        'https://taodandewukong.pro',
+        'http://localhost:3000',
+        'http://localhost:3001',
+        'http://localhost:3002',
+        'http://localhost:3003',
+        'http://localhost:3004'
+    ];
 
 // Add wildcard support for development
 if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
     allowedOrigins.push('*');
 }
 
-// CORS origins configured silently
+console.log('🌐 Allowed CORS Origins:', allowedOrigins);
 
 app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
 
+        console.log('🔍 Request Origin:', origin);
+        console.log('✅ Checking against allowed origins:', allowedOrigins);
+        console.log('🔧 Environment:', process.env.NODE_ENV);
+
         // Check exact match or wildcard
         if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+            console.log('✅ CORS allowed for:', origin);
             return callback(null, true);
         }
 
         // Check for subdomain matches (e.g., www.taodandewukong.pro matches taodandewukong.pro)
         const isSubdomainMatch = allowedOrigins.some(allowedOrigin => {
             if (allowedOrigin.includes('.')) {
-                const domain = allowedOrigin.replace(/^https?:\/\//, '').toLowerCase();
-                const requestDomain = origin.replace(/^https?:\/\//, '').toLowerCase();
+                const domain = allowedOrigin.replace(/^https?:\/\//, '');
+                const requestDomain = origin.replace(/^https?:\/\//, '');
 
                 // Exact match
-                if (requestDomain === domain) {
-                    return true;
-                }
+                if (requestDomain === domain) return true;
 
                 // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
-                if (requestDomain.endsWith('.' + domain)) {
-                    return true;
-                }
+                if (requestDomain.endsWith('.' + domain)) return true;
 
                 // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
-                if (domain.endsWith('.' + requestDomain)) {
-                    return true;
-                }
+                if (domain.endsWith('.' + requestDomain)) return true;
 
                 // Check if both are subdomains of the same root domain
-                // This allows www.taodandewukong.pro to call api1.taodandewukong.pro
                 const requestParts = requestDomain.split('.');
                 const domainParts = domain.split('.');
 
                 if (requestParts.length >= 2 && domainParts.length >= 2) {
-                    const requestRoot = requestParts.slice(-2).join('.'); // taodandewukong.pro
-                    const domainRoot = domainParts.slice(-2).join('.'); // taodandewukong.pro
-                    
-                    // Match if same root domain (www.taodandewukong.pro <-> api1.taodandewukong.pro)
-                    if (requestRoot === domainRoot && requestRoot === 'taodandewukong.pro') {
-                        return true;
-                    }
+                    const requestRoot = requestParts.slice(-2).join('.');
+                    const domainRoot = domainParts.slice(-2).join('.');
+                    return requestRoot === domainRoot;
                 }
             }
             return false;
         });
 
         if (isSubdomainMatch) {
+            console.log('✅ CORS allowed for subdomain:', origin);
             return callback(null, true);
         }
 
-        // Log CORS error only in development
-        if (process.env.NODE_ENV === 'development') {
-            console.log('❌ CORS blocked for:', origin);
-            console.log('🔍 Debug - Request domain parts:', origin.replace(/^https?:\/\//, '').split('.'));
-            console.log('🔍 Debug - Allowed origins domain parts:', allowedOrigins.map(o => o.replace(/^https?:\/\//, '').split('.')));
-        }
+        console.log('❌ CORS blocked for:', origin);
+        console.log('🔍 Debug - Request domain parts:', origin.replace(/^https?:\/\//, '').split('.'));
+        console.log('🔍 Debug - Allowed origins domain parts:', allowedOrigins.map(o => o.replace(/^https?:\/\//, '').split('.')));
         return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
@@ -180,13 +144,13 @@ app.options('*', cors());
 app.use((req, res, next) => {
     const origin = req.headers.origin;
 
-    // Check if origin is allowed (same logic as CORS middleware)
+    // Check if origin is allowed
     const isAllowedOrigin = allowedOrigins.includes('*') ||
         allowedOrigins.includes(origin) ||
         (origin && allowedOrigins.some(allowedOrigin => {
             if (allowedOrigin.includes('.')) {
-                const domain = allowedOrigin.replace(/^https?:\/\//, '').toLowerCase();
-                const requestDomain = origin.replace(/^https?:\/\//, '').toLowerCase();
+                const domain = allowedOrigin.replace(/^https?:\/\//, '');
+                const requestDomain = origin.replace(/^https?:\/\//, '');
 
                 // Exact match
                 if (requestDomain === domain) return true;
@@ -453,7 +417,6 @@ app.use('/api/soicau-page', soicauPageRoutes);
 app.use('/api/advanced-gap-analysis', advancedGapAnalysisRoutes);
 app.use('/api/ultra-advanced-soicau', ultraAdvancedSoiCauRoutes);
 app.use('/api', uploadRoutes);
-app.use('/api', thongKeImageRoutes);
 
 // Auth routes
 app.use('/api/auth', authRoutes);
@@ -482,7 +445,7 @@ app.use('/uploads', (req, res, next) => {
 }, express.static('uploads', {
     setHeaders: (res, path) => {
         // Set cache headers for images
-        if (path.endsWith('.png') || path.endsWith('.jpg') || path.endsWith('.jpeg') ||
+        if (path.endsWith('.png') || path.endsWith('.jpg') || path.endsWith('.jpeg') || 
             path.endsWith('.gif') || path.endsWith('.webp')) {
             res.setHeader('Cache-Control', 'public, max-age=3600');
         }
@@ -516,15 +479,11 @@ const startServer = async () => {
 
         // Khởi động server ngay lập tức (không chờ MongoDB)
         const server = app.listen(PORT, '0.0.0.0', () => {
-            if (process.env.NODE_ENV === 'development') {
-                console.log(`🚀 Server đang chạy trên port ${PORT}`);
-                console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
-                console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
-                console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
-                console.log(`✅ Root endpoint available at: http://localhost:${PORT}/`);
-            } else {
-                console.log(`🚀 Server đang chạy trên port ${PORT}`);
-            }
+            console.log(`🚀 Server đang chạy trên port ${PORT}`);
+            console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
+            console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
+            console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
+            console.log(`✅ Root endpoint available at: http://localhost:${PORT}/`);
         });
 
         // Initialize Socket.io for real-time chat
@@ -546,7 +505,7 @@ const startServer = async () => {
                         }
                     }
                 });
-
+                
                 // Only log error once
                 redisClient.on('error', (err) => {
                     if (!redisErrorLogged) {
@@ -555,12 +514,12 @@ const startServer = async () => {
                         redisErrorLogged = true;
                     }
                 });
-
+                
                 redisClient.on('connect', () => {
                     console.log('✅ Redis connected for caching');
                     redisErrorLogged = false; // Reset flag on successful connection
                 });
-
+                
                 // Try to connect with timeout
                 const connectPromise = redisClient.connect().catch((err) => {
                     if (!redisErrorLogged) {
@@ -568,7 +527,7 @@ const startServer = async () => {
                         redisErrorLogged = true;
                     }
                 });
-
+                
                 // Set timeout for connection attempt
                 await Promise.race([
                     connectPromise,
@@ -586,23 +545,12 @@ const startServer = async () => {
         // Initialize Socket.io
         const { initializeSocket } = require('./src/services/socket.service');
         initializeSocket(server, redisClient);
-        if (process.env.NODE_ENV === 'development') {
-            console.log('✅ Socket.io initialized for real-time chat');
-        }
-
-        // Initialize Lottery Socket Service (namespace /lottery)
-        // Service sẽ tự động khởi tạo sau 1 giây để đảm bảo socket.io đã sẵn sàng
-        require('./src/services/lotterySocket.service');
-        if (process.env.NODE_ENV === 'development') {
-            console.log('✅ Lottery Socket Service đang khởi tạo...');
-        }
+        console.log('✅ Socket.io initialized for real-time chat');
 
         // Kết nối MongoDB trong background (không block server start)
         const connectMongoDBInBackground = async () => {
             try {
-                if (process.env.NODE_ENV === 'development') {
-                    console.log('🔄 Đang kết nối MongoDB trong background...');
-                }
+                console.log('🔄 Đang kết nối MongoDB trong background...');
 
                 const connectWithTimeout = async () => {
                     const timeout = new Promise((_, reject) => {
@@ -614,9 +562,7 @@ const startServer = async () => {
                 };
 
                 await connectWithTimeout();
-                if (process.env.NODE_ENV === 'development') {
-                    console.log('✅ Kết nối MongoDB thành công');
-                }
+                console.log('✅ Kết nối MongoDB thành công');
 
             } catch (error) {
                 console.warn('⚠️ MongoDB connection failed:', error.message);
@@ -630,15 +576,13 @@ const startServer = async () => {
         // Start MongoDB connection in background
         connectMongoDBInBackground();
 
-        // Initialize schedulers
+        // Initialize XSMB Scheduler
         xsmbScheduler.init();
-        thongKeNhanhScheduler.init();
 
         // Graceful shutdown
         process.on('SIGTERM', async () => {
             console.log('SIGTERM signal received: closing HTTP server');
             xsmbScheduler.stop();
-            thongKeNhanhScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();
@@ -649,7 +593,6 @@ const startServer = async () => {
         process.on('SIGINT', async () => {
             console.log('SIGINT signal received: closing HTTP server');
             xsmbScheduler.stop();
-            thongKeNhanhScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();

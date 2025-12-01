@@ -18,7 +18,7 @@ class SoiCauService {
         this.probabilityStatsService = new ProbabilityStatisticsService();
         this.advancedSoiCauService = new AdvancedSoiCauService();
 
-        // Service initialized silently
+        console.log('✅ SoiCauService initialized with Advanced Soi Cầu');
     }
 
     /**

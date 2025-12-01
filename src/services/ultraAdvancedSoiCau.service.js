@@ -27,7 +27,7 @@ class UltraAdvancedSoiCauService {
         this.geneticPopulation = this.initializeGeneticPopulation();
         this.chaosAttractors = this.initializeChaosAttractors();
         this.fractalDimensions = this.initializeFractalDimensions();
-        // Service initialized silently
+        console.log('🧠 ULTRA ADVANCED SOI CẦU SERVICE INITIALIZED - AI POWERED!');
     }
 
     /**

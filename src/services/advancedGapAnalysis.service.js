@@ -22,7 +22,7 @@ class AdvancedGapAnalysisService {
             seasonal: 0.05,       // Trọng số cho pattern theo mùa (giảm)
             dailyContext: 0.05    // Trọng số cho context ngày (giảm)
         };
-        // Service initialized silently
+        console.log('✅ AdvancedGapAnalysisService initialized');
     }
 
     /**

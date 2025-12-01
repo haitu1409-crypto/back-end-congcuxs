@@ -17,7 +17,7 @@ const XSMB = require('../models/xsmb.model');
 class AdvancedSoiCauService {
     constructor() {
         this.cache = new NodeCache({ stdTTL: 1800 });
-        // Service initialized silently
+        console.log('✅ AdvancedSoiCauService initialized with all methods');
     }
 
     /**

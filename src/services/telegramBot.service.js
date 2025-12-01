@@ -799,6 +799,41 @@ async function broadcastMessage(bot, sourceChatId, text, options = {}) {
     return { success, failed };
 }
 
+// Helper functions for user mention formatting
+const sanitizeUsername = (value) => {
+    if (!value) return null;
+    return value.startsWith('@') ? value.slice(1) : value;
+};
+
+const buildUserMention = (profile = {}) => {
+    const username =
+        sanitizeUsername(profile.username) ||
+        sanitizeUsername(profile.userUsername);
+    const displayName =
+        profile.displayName ||
+        profile.fullName ||
+        (() => {
+            const parts = [profile.first_name, profile.last_name]
+                .filter(Boolean)
+                .map(part => String(part).trim());
+            const joined = parts.join(' ').trim();
+            return joined || null;
+        })();
+    if (username && displayName) {
+        return `${displayName}(@${username})`;
+    }
+    if (username) {
+        return `@${username}`;
+    }
+    if (displayName) {
+        return displayName;
+    }
+    if (profile.userId || profile.id) {
+        return `user_${profile.userId || profile.id}`;
+    }
+    return 'bạn';
+};
+
 async function triggerScheduledJob(bot, chatId, type) {
     if (type === 'xsmb') {
         // Sử dụng chat_id đã migrate nếu có
@@ -1137,7 +1172,9 @@ function scheduleForChat({ bot, chatId, time, type }) {
             existingJob.job.stop();
         }
     }
-    // Không log chi tiết từng chat để giảm spam log (chỉ log summary ở setupDefaultSchedules)
+    const hourStr = String(time.hour).padStart(2, '0');
+    const minuteStr = String(time.minute).padStart(2, '0');
+    console.log(`[TelegramBot] 📅 Đăng ký lịch ${type} cho chat ${chatId} lúc ${hourStr}:${minuteStr} (${cronExpression}) - Timezone: ${DEFAULT_SCHEDULE_TIMEZONE}`);
     const job = cron.schedule(
         cronExpression,
         async () => {
@@ -1240,33 +1277,18 @@ function setupLotterySocketRealtime(bot) {
     // Hàm kết nối socket (chỉ kết nối trong khung giờ live)
     function connectSocketIfInLiveWindow() {
         if (isWithinLiveWindow()) {
-            const status = telegramLotterySocketClient.getConnectionStatus();
-            if (!status.connected) {
-                try {
-                    console.log('[TelegramBot] 🔴 Trong khung live, kết nối socket lottery...');
-                    const socket = telegramLotterySocketClient.connect();
-                    // Chỉ reset flag nếu kết nối thành công
-                    if (socket) {
-                        hasSentComplete.clear();
-                        console.log('[TelegramBot] 🔄 Đã reset hasSentComplete flag cho khung giờ mới');
-                    } else {
-                        console.log('[TelegramBot] ⚠️ Không thể kết nối socket, sẽ thử lại sau');
-                    }
-                } catch (error) {
-                    console.error('[TelegramBot] ❌ Lỗi khi kết nối socket:', error.message);
-                    // Không throw error để không ảnh hưởng đến các chức năng khác
-                }
+            if (!telegramLotterySocketClient.getConnectionStatus().connected) {
+                console.log('[TelegramBot] 🔴 Trong khung live, kết nối socket lottery...');
+                telegramLotterySocketClient.connect();
+                // Reset flag khi bắt đầu khung giờ mới
+                hasSentComplete.clear();
+                console.log('[TelegramBot] 🔄 Đã reset hasSentComplete flag cho khung giờ mới');
             }
         } else {
             // Ngoài khung live, ngắt kết nối để tiết kiệm tài nguyên
-            const status = telegramLotterySocketClient.getConnectionStatus();
-            if (status.connected) {
-                try {
-                    console.log('[TelegramBot] 🛑 Ngoài khung live, ngắt kết nối socket lottery');
-                    telegramLotterySocketClient.disconnect();
-                } catch (error) {
-                    console.error('[TelegramBot] ❌ Lỗi khi ngắt kết nối socket:', error.message);
-                }
+            if (telegramLotterySocketClient.getConnectionStatus().connected) {
+                console.log('[TelegramBot] 🛑 Ngoài khung live, ngắt kết nối socket lottery');
+                telegramLotterySocketClient.disconnect();
             }
         }
     }
@@ -1543,10 +1565,8 @@ function setupLotterySocketRealtime(bot) {
         }
     });
 
-    if (process.env.NODE_ENV === 'development') {
-        console.log('[TelegramBot] ✅ Lottery Socket Realtime đã được khởi tạo');
-        console.log(`[TelegramBot] 📅 Khung giờ live: ${process.env.TELEGRAM_LIVE_WINDOW_HOUR || 18}:${process.env.TELEGRAM_LIVE_WINDOW_START_MINUTE || 10} - ${process.env.TELEGRAM_LIVE_WINDOW_END_MINUTE || 33}`);
-    }
+    console.log('[TelegramBot] ✅ Lottery Socket Realtime đã được khởi tạo');
+    console.log(`[TelegramBot] 📅 Khung giờ live: ${process.env.TELEGRAM_LIVE_WINDOW_HOUR || 18}:${process.env.TELEGRAM_LIVE_WINDOW_START_MINUTE || 10} - ${process.env.TELEGRAM_LIVE_WINDOW_END_MINUTE || 33}`);
 }
 
 function setupDefaultSchedules(bot) {
@@ -1573,9 +1593,11 @@ function setupDefaultSchedules(bot) {
 
             scheduleTimes.forEach((scheduleTime) => {
                 scheduleForChat({ bot, chatId, time: scheduleTime, type: 'xsmb' });
+                const hourStr = String(scheduleTime.hour).padStart(2, '0');
+                const minuteStr = String(scheduleTime.minute).padStart(2, '0');
+                console.log(`[TelegramBot] Auto schedule XSMB ${hourStr}:${minuteStr} cho chat ${chatId}`);
             });
         });
-        // Schedule registered silently
     }
 
     // Setup schedule cho thông báo kết quả dự đoán
@@ -1587,8 +1609,10 @@ function setupDefaultSchedules(bot) {
             const chatId = chatIdRaw.trim();
             if (!chatId) return;
             scheduleForChat({ bot, chatId, time: notificationTime, type: 'prediction_result' });
+            const hourStr = String(notificationTime.hour).padStart(2, '0');
+            const minuteStr = String(notificationTime.minute).padStart(2, '0');
+            console.log(`[TelegramBot] Auto schedule thông báo kết quả dự đoán ${hourStr}:${minuteStr} cho chat ${chatId}`);
         });
-        // Schedule registered silently
     }
 
     // Setup schedule cho danh sách dự đoán
@@ -1600,8 +1624,10 @@ function setupDefaultSchedules(bot) {
             const chatId = chatIdRaw.trim();
             if (!chatId) return;
             scheduleForChat({ bot, chatId, time: forecastTime, type: 'prediction_list' });
+            const hourStr = String(forecastTime.hour).padStart(2, '0');
+            const minuteStr = String(forecastTime.minute).padStart(2, '0');
+            console.log(`[TelegramBot] Auto schedule danh sách dự đoán ${hourStr}:${minuteStr} cho chat ${chatId}`);
         });
-        // Schedule registered silently
     }
 
     // Setup schedule cho thống kê kết quả dự đoán
@@ -1613,8 +1639,10 @@ function setupDefaultSchedules(bot) {
             const chatId = chatIdRaw.trim();
             if (!chatId) return;
             scheduleForChat({ bot, chatId, time: statsTime, type: 'prediction_stats' });
+            const hourStr = String(statsTime.hour).padStart(2, '0');
+            const minuteStr = String(statsTime.minute).padStart(2, '0');
+            console.log(`[TelegramBot] Auto schedule thống kê kết quả dự đoán ${hourStr}:${minuteStr} cho chat ${chatId}`);
         });
-        // Schedule registered silently
     }
 
     // Setup schedule cho thông báo đóng đăng ký
@@ -1626,8 +1654,10 @@ function setupDefaultSchedules(bot) {
             const chatId = chatIdRaw.trim();
             if (!chatId) return;
             scheduleForChat({ bot, chatId, time: signupCloseTime, type: 'prediction_signup_close' });
+            const hourStr = String(signupCloseTime.hour).padStart(2, '0');
+            const minuteStr = String(signupCloseTime.minute).padStart(2, '0');
+            console.log(`[TelegramBot] Auto schedule thông báo đóng đăng ký ${hourStr}:${minuteStr} cho chat ${chatId}`);
         });
-        // Schedule registered silently
     }
 
     // Setup schedule nhắc thành viên ít tương tác
@@ -1639,8 +1669,10 @@ function setupDefaultSchedules(bot) {
             const chatId = chatIdRaw.trim();
             if (!chatId) return;
             scheduleForChat({ bot, chatId, time: inactiveReminderTime, type: 'inactive_reminder' });
+            const hourStr = String(inactiveReminderTime.hour).padStart(2, '0');
+            const minuteStr = String(inactiveReminderTime.minute).padStart(2, '0');
+            console.log(`[TelegramBot] Auto schedule nhắc thành viên ít tương tác ${hourStr}:${minuteStr} cho chat ${chatId}`);
         });
-        // Schedule registered silently
     }
 
     // Setup schedule cho thông báo chúc mừng - schedule nhiều khung giờ (mặc định: 16:00, 17:30)
@@ -1665,9 +1697,11 @@ function setupDefaultSchedules(bot) {
 
             chucMungScheduleTimes.forEach((scheduleTime) => {
                 scheduleForChat({ bot, chatId, time: scheduleTime, type: 'chuc_mung' });
+                const hourStr = String(scheduleTime.hour).padStart(2, '0');
+                const minuteStr = String(scheduleTime.minute).padStart(2, '0');
+                console.log(`[TelegramBot] Auto schedule thông báo chúc mừng ${hourStr}:${minuteStr} cho chat ${chatId}`);
             });
         });
-        // Schedule registered silently
     }
 
     if (!autoScheduleChats.length) {
@@ -2513,11 +2547,6 @@ module.exports = function initTelegramBot() {
     const predictionHandlers = createPredictionHandlers({ xsmbModel: XSMB });
     predictionHandlersInstance = predictionHandlers;
 
-    const sanitizeUsername = (value) => {
-        if (!value) return null;
-        return value.startsWith('@') ? value.slice(1) : value;
-    };
-
     const extractUserIdentifiers = (user = {}) => {
         if (!user) return { username: null, displayName: null };
         const username = sanitizeUsername(user.username);
@@ -2527,35 +2556,6 @@ module.exports = function initTelegramBot() {
         const displayNameRaw = nameParts.join(' ').trim();
         const displayName = displayNameRaw || username || (user.id ? `user_${user.id}` : null);
         return { username, displayName };
-    };
-
-    const buildUserMention = (profile = {}) => {
-        const username =
-            sanitizeUsername(profile.username) ||
-            sanitizeUsername(profile.userUsername);
-        const displayName =
-            profile.displayName ||
-            profile.fullName ||
-            (() => {
-                const parts = [profile.first_name, profile.last_name]
-                    .filter(Boolean)
-                    .map(part => String(part).trim());
-                const joined = parts.join(' ').trim();
-                return joined || null;
-            })();
-        if (username && displayName) {
-            return `${displayName}(@${username})`;
-        }
-        if (username) {
-            return `@${username}`;
-        }
-        if (displayName) {
-            return displayName;
-        }
-        if (profile.userId || profile.id) {
-            return `user_${profile.userId || profile.id}`;
-        }
-        return 'bạn';
     };
 
     // Middleware ghi nhận tương tác của user (message, reply, callback_query, reaction)
