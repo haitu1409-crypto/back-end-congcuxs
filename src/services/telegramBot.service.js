@@ -1279,6 +1279,8 @@ function setupLotterySocketRealtime(bot) {
         if (isWithinLiveWindow()) {
             if (!telegramLotterySocketClient.getConnectionStatus().connected) {
                 console.log('[TelegramBot] 🔴 Trong khung live, kết nối socket lottery...');
+                // Reset reconnection attempts để thử lại từ đầu
+                telegramLotterySocketClient.resetReconnectionAttempts();
                 telegramLotterySocketClient.connect();
                 // Reset flag khi bắt đầu khung giờ mới
                 hasSentComplete.clear();
@@ -1293,8 +1295,27 @@ function setupLotterySocketRealtime(bot) {
         }
     }
 
-    // Kiểm tra và kết nối ngay khi setup
-    connectSocketIfInLiveWindow();
+    // Kiểm tra và kết nối sau khi đợi socket server khởi tạo (delay 3 giây)
+    // Điều này đảm bảo socket server đã sẵn sàng trước khi client kết nối
+    setTimeout(() => {
+        connectSocketIfInLiveWindow();
+    }, 3000);
+
+    // Lắng nghe lỗi kết nối và reset attempts khi vào khung giờ mới
+    telegramLotterySocketClient.on('connection_error', (error) => {
+        // Nếu đang trong khung live và có lỗi, thử reset và kết nối lại sau một khoảng thời gian
+        if (isWithinLiveWindow()) {
+            console.log('[TelegramBot] ⚠️ Socket connection error detected, will retry later...');
+            // Reset attempts sau 2 phút để thử lại
+            setTimeout(() => {
+                if (isWithinLiveWindow() && !telegramLotterySocketClient.getConnectionStatus().connected) {
+                    console.log('[TelegramBot] 🔄 Retrying socket connection after error...');
+                    telegramLotterySocketClient.resetReconnectionAttempts();
+                    telegramLotterySocketClient.connect();
+                }
+            }, 120000); // Đợi 2 phút trước khi thử lại
+        }
+    });
 
     // Kiểm tra lại mỗi phút để tự động kết nối/ngắt kết nối
     const checkInterval = setInterval(() => {

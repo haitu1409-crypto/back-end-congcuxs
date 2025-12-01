@@ -14,6 +14,8 @@ class TelegramLotterySocketClient {
         this.reconnectAttempts = 0;
         this.maxReconnectAttempts = 10;
         this.liveData = {}; // Lưu trữ dữ liệu hiện tại
+        this.lastErrorLogTime = 0; // Track last error log time to prevent spam
+        this.errorLogInterval = 30000; // Only log errors every 30 seconds max
     }
 
     /**
@@ -27,9 +29,21 @@ class TelegramLotterySocketClient {
         }
 
         // Get socket URL từ env hoặc default
+        // Ưu tiên SOCKET_URL, sau đó API_URL, cuối cùng là localhost
         let SOCKET_URL = process.env.SOCKET_URL || 
             process.env.API_URL || 
-            'http://localhost:5000';
+            null;
+
+        // Nếu không có URL từ env, cố gắng xây dựng từ PORT hoặc sử dụng localhost
+        if (!SOCKET_URL) {
+            const PORT = process.env.PORT || 5000;
+            const HOST = process.env.HOST || 'localhost';
+            const PROTOCOL = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+            SOCKET_URL = `${PROTOCOL}://${HOST}:${PORT}`;
+        }
+
+        // Normalize URL - loại bỏ trailing slash
+        SOCKET_URL = SOCKET_URL.replace(/\/$/, '');
 
         // Normalize URL
         if (SOCKET_URL.startsWith('ws://')) {
@@ -46,14 +60,18 @@ class TelegramLotterySocketClient {
             upgrade: true,
             rememberUpgrade: true,
             reconnection: true,
-            reconnectionDelay: 1000,
-            reconnectionDelayMax: 10000,
+            reconnectionDelay: 2000, // Tăng delay để giảm spam
+            reconnectionDelayMax: 30000, // Tăng max delay lên 30 giây
             reconnectionAttempts: this.maxReconnectAttempts,
-            timeout: 20000,
+            timeout: 30000, // Tăng timeout lên 30 giây
             forceNew: false,
             autoConnect: true,
             path: '/socket.io/',
-            withCredentials: false
+            withCredentials: false,
+            // Thêm options để xử lý lỗi tốt hơn
+            rejectUnauthorized: process.env.NODE_ENV === 'production' ? true : false,
+            // Retry connection với exponential backoff
+            randomizationFactor: 0.5
         });
 
         // Connection events
@@ -61,6 +79,7 @@ class TelegramLotterySocketClient {
             console.log('[TelegramLotterySocket] ✅ Connected to /lottery namespace');
             this.isConnected = true;
             this.reconnectAttempts = 0;
+            this.lastErrorLogTime = 0; // Reset error log time on successful connection
 
             // Request latest result (auto-joined to lottery:xsmb room)
             this.socket.emit('lottery:get-latest');
@@ -75,14 +94,32 @@ class TelegramLotterySocketClient {
         });
 
         this.socket.on('connect_error', (error) => {
-            console.error('[TelegramLotterySocket] ❌ Connection error:', error.message);
+            const errorDetails = {
+                message: error.message,
+                type: error.type,
+                description: error.description,
+                context: error.context,
+                transport: error.transport?.name || 'unknown'
+            };
+
+            // Chỉ log chi tiết lỗi lần đầu hoặc mỗi 5 lần thử lại để tránh spam
+            if (this.reconnectAttempts === 0 || this.reconnectAttempts % 5 === 0) {
+                console.error('[TelegramLotterySocket] ❌ Connection error:', JSON.stringify(errorDetails, null, 2));
+                console.error('[TelegramLotterySocket] 📍 Connecting to:', SOCKET_URL);
+            }
+
             this.reconnectAttempts++;
 
             if (this.reconnectAttempts >= this.maxReconnectAttempts) {
                 console.error('[TelegramLotterySocket] 🔴 Max reconnection attempts reached');
+                console.error('[TelegramLotterySocket] ⚠️ Will retry connection later (when in live window)');
+                // Không dừng lại hoàn toàn, sẽ thử lại khi được gọi lại
                 this.notifyListeners('connection_error', error);
             } else {
-                console.log(`[TelegramLotterySocket] 🔄 Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
+                // Chỉ log mỗi 5 lần thử lại để tránh spam
+                if (this.reconnectAttempts % 5 === 0 || this.reconnectAttempts <= 3) {
+                    console.log(`[TelegramLotterySocket] 🔄 Reconnection attempt ${this.reconnectAttempts}/${this.maxReconnectAttempts}`);
+                }
             }
         });
 
@@ -322,6 +359,14 @@ class TelegramLotterySocketClient {
             connected: this.isConnected,
             socket: this.socket
         };
+    }
+
+    /**
+     * Reset reconnection attempts (gọi khi muốn thử lại từ đầu)
+     */
+    resetReconnectionAttempts() {
+        this.reconnectAttempts = 0;
+        this.lastErrorLogTime = 0;
     }
 }
 
