@@ -53,16 +53,13 @@ class TelegramLotterySocketClient {
                     SOCKET_URL = possibleUrls[0];
                     console.log(`[TelegramLotterySocket] 🔍 Auto-detected URL: ${SOCKET_URL}`);
                 } else {
-                    // Trong production, nếu không detect được, log warning và dùng localhost với http
+                    // Trong production, nếu không detect được, log warning và không kết nối
                     console.warn('[TelegramLotterySocket] ⚠️ Production mode nhưng không có SOCKET_URL/API_URL');
                     console.warn('[TelegramLotterySocket] ⚠️ Vui lòng set SOCKET_URL hoặc API_URL trong environment variables');
                     console.warn('[TelegramLotterySocket] ⚠️ Ví dụ: SOCKET_URL=https://api1.taodandewukong.pro');
-                    
-                    // Trong production, không nên dùng localhost, nhưng để tránh crash, vẫn thử kết nối nội bộ
-                    // Nếu đang chạy trên cùng server, có thể dùng 127.0.0.1 với http
-                    const PORT = process.env.PORT || 5000;
-                    SOCKET_URL = `http://127.0.0.1:${PORT}`;
-                    console.log(`[TelegramLotterySocket] 🔄 Fallback to internal connection: ${SOCKET_URL}`);
+                    console.warn('[TelegramLotterySocket] ⚠️ Không thể kết nối socket trong production mà không có URL hợp lệ');
+                    // Không kết nối nếu không có URL hợp lệ trong production
+                    return null;
                 }
             }
         }
@@ -83,14 +80,6 @@ class TelegramLotterySocketClient {
             SOCKET_URL = SOCKET_URL.replace('ws://', 'http://');
         } else if (SOCKET_URL.startsWith('wss://')) {
             SOCKET_URL = SOCKET_URL.replace('wss://', 'https://');
-        }
-
-        // Trong production, nếu URL có chứa 'localhost', thử thay thế bằng 127.0.0.1 với http
-        // vì localhost với https sẽ không hoạt động
-        if (process.env.NODE_ENV === 'production' && SOCKET_URL.includes('localhost')) {
-            const PORT = process.env.PORT || 5000;
-            console.warn('[TelegramLotterySocket] ⚠️ Production mode phát hiện localhost, chuyển sang kết nối nội bộ');
-            SOCKET_URL = `http://127.0.0.1:${PORT}`;
         }
 
         console.log('[TelegramLotterySocket] 🔌 Connecting to lottery socket server:', SOCKET_URL);

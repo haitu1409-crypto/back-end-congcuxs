@@ -322,19 +322,13 @@ app.use('/api/admin/', chatApiLimiter);
 app.use('/api/soicau-page/', heavyApiLimiter);
 
 // Health check endpoint for UptimeRobot monitoring
+// Endpoint này phải response nhanh để Render không kill service
 app.get('/health', (req, res) => {
-    const startTime = Date.now();
-
+    // Response ngay lập tức, không chờ bất kỳ thứ gì
     res.status(200).json({
         status: 'OK',
         timestamp: new Date().toISOString(),
-        uptime: process.uptime(),
-        environment: process.env.NODE_ENV || 'development',
-        memory: process.memoryUsage(),
-        version: process.version,
-        responseTime: `${Date.now() - startTime}ms`,
-        pid: process.pid,
-        uptimeFormatted: formatUptime(process.uptime())
+        uptime: process.uptime()
     });
 });
 
@@ -477,75 +471,82 @@ const startServer = async () => {
     try {
         console.log('🔄 Đang khởi động server...');
 
-        // Khởi động server ngay lập tức (không chờ MongoDB)
+        // Khởi động server NGAY LẬP TỨC (không chờ bất cứ thứ gì)
+        // Điều này đảm bảo health check có thể response ngay
         const server = app.listen(PORT, '0.0.0.0', () => {
             console.log(`🚀 Server đang chạy trên port ${PORT}`);
             console.log(`📝 Environment: ${process.env.NODE_ENV || 'development'}`);
             console.log(`🌐 Frontend URL: ${process.env.FRONTEND_URL || 'Not set'}`);
             console.log(`✅ Health check available at: http://localhost:${PORT}/health`);
             console.log(`✅ Root endpoint available at: http://localhost:${PORT}/`);
+            console.log('✅ Server ready to accept requests');
         });
 
-        // Initialize Socket.io for real-time chat
-        let redisClient = null;
-        let redisErrorLogged = false; // Flag để tránh spam log
-        try {
-            // Try to connect Redis (optional)
-            if (process.env.REDIS_URL) {
-                const redis = require('redis');
-                redisClient = redis.createClient({
-                    url: process.env.REDIS_URL,
-                    socket: {
-                        reconnectStrategy: (retries) => {
-                            // Disable auto-reconnect để tránh spam log
-                            if (retries > 3) {
-                                return false; // Stop reconnecting after 3 retries
-                            }
-                            return retries * 100; // Exponential backoff
-                        }
-                    }
-                });
-                
-                // Only log error once
-                redisClient.on('error', (err) => {
-                    if (!redisErrorLogged) {
-                        console.warn('⚠️ Redis connection error:', err.message);
-                        console.log('🔄 Continuing without Redis cache...');
-                        redisErrorLogged = true;
-                    }
-                });
-                
-                redisClient.on('connect', () => {
-                    console.log('✅ Redis connected for caching');
-                    redisErrorLogged = false; // Reset flag on successful connection
-                });
-                
-                // Try to connect with timeout
-                const connectPromise = redisClient.connect().catch((err) => {
-                    if (!redisErrorLogged) {
-                        console.log('⚠️ Redis not available, continuing without cache');
-                        redisErrorLogged = true;
-                    }
-                });
-                
-                // Set timeout for connection attempt
-                await Promise.race([
-                    connectPromise,
-                    new Promise((resolve) => setTimeout(resolve, 3000)) // 3 second timeout
-                ]);
-            }
-        } catch (error) {
-            if (!redisErrorLogged) {
-                console.warn('⚠️ Redis setup failed:', error.message);
-                console.log('🔄 Continuing without Redis cache...');
-                redisErrorLogged = true;
-            }
-        }
+        // Đảm bảo server không bị block bởi bất kỳ thứ gì
+        server.timeout = 120000; // 2 minutes timeout
+        server.keepAliveTimeout = 65000;
+        server.headersTimeout = 66000;
 
-        // Initialize Socket.io
+        // Initialize Socket.io ngay lập tức (không block server start)
         const { initializeSocket } = require('./src/services/socket.service');
-        initializeSocket(server, redisClient);
+        initializeSocket(server, null); // Pass null initially, Redis sẽ connect sau
         console.log('✅ Socket.io initialized for real-time chat');
+
+        // Connect Redis trong background (không block server start)
+        let redisClient = null;
+        let redisErrorLogged = false;
+        const connectRedisInBackground = async () => {
+            try {
+                if (process.env.REDIS_URL) {
+                    const redis = require('redis');
+                    redisClient = redis.createClient({
+                        url: process.env.REDIS_URL,
+                        socket: {
+                            reconnectStrategy: (retries) => {
+                                if (retries > 3) {
+                                    return false;
+                                }
+                                return retries * 100;
+                            },
+                            connectTimeout: 2000 // Giảm timeout xuống 2 giây
+                        }
+                    });
+                    
+                    redisClient.on('error', (err) => {
+                        if (!redisErrorLogged) {
+                            console.warn('⚠️ Redis connection error:', err.message);
+                            console.log('🔄 Continuing without Redis cache...');
+                            redisErrorLogged = true;
+                        }
+                    });
+                    
+                    redisClient.on('connect', () => {
+                        console.log('✅ Redis connected for caching');
+                        redisErrorLogged = false;
+                    });
+                    
+                    // Try to connect với timeout ngắn hơn
+                    await Promise.race([
+                        redisClient.connect(),
+                        new Promise((resolve) => setTimeout(() => {
+                            console.log('⚠️ Redis connection timeout, continuing without cache');
+                            resolve();
+                        }, 2000)) // 2 giây timeout thay vì 3
+                    ]);
+                }
+            } catch (error) {
+                if (!redisErrorLogged) {
+                    console.warn('⚠️ Redis setup failed:', error.message);
+                    console.log('🔄 Continuing without Redis cache...');
+                    redisErrorLogged = true;
+                }
+            }
+        };
+
+        // Connect Redis trong background sau khi server đã start
+        setTimeout(() => {
+            connectRedisInBackground();
+        }, 1000);
 
         // Kết nối MongoDB trong background (không block server start)
         const connectMongoDBInBackground = async () => {

@@ -8,6 +8,9 @@ class XSMBSchedulerService {
         this.scheduledJob = null;
         this.lastRun = null;
         this.nextRun = null;
+        this.scheduledHour = 18;
+        this.scheduledMinute = 35;
+        this.timezone = 'Asia/Ho_Chi_Minh';
     }
 
     /**
@@ -16,12 +19,41 @@ class XSMBSchedulerService {
     init() {
         console.log('🕐 Khởi tạo XSMB Scheduler...');
 
-        // Lên lịch chạy hàng ngày lúc 18:35
-        this.scheduledJob = cron.schedule('35 18 * * *', async () => {
+        // Đọc cấu hình từ environment variables
+        let hour = parseInt(process.env.XSMB_SCRAPER_HOUR) || 18;
+        let minute = parseInt(process.env.XSMB_SCRAPER_MINUTE) || 35;
+        const timezone = process.env.XSMB_SCRAPER_TIMEZONE || 'Asia/Ho_Chi_Minh';
+
+        // Validate giá trị
+        if (isNaN(hour) || hour < 0 || hour > 23) {
+            console.error(`❌ XSMB_SCRAPER_HOUR không hợp lệ: ${process.env.XSMB_SCRAPER_HOUR}, sử dụng giá trị mặc định: 18`);
+            hour = 18;
+        }
+        if (isNaN(minute) || minute < 0 || minute > 59) {
+            console.error(`❌ XSMB_SCRAPER_MINUTE không hợp lệ: ${process.env.XSMB_SCRAPER_MINUTE}, sử dụng giá trị mặc định: 35`);
+            minute = 35;
+        }
+
+        // Lưu cấu hình để sử dụng sau
+        this.scheduledHour = hour;
+        this.scheduledMinute = minute;
+        this.timezone = timezone;
+
+        // Tạo cron expression từ cấu hình
+        const cronExpression = `${minute} ${hour} * * *`;
+
+        console.log(`📅 Cấu hình scheduler:`);
+        console.log(`   - Hour: ${hour}`);
+        console.log(`   - Minute: ${minute}`);
+        console.log(`   - Timezone: ${timezone}`);
+        console.log(`   - Cron: ${cronExpression}`);
+
+        // Lên lịch chạy hàng ngày theo cấu hình
+        this.scheduledJob = cron.schedule(cronExpression, async () => {
             await this.runDailyScraping();
         }, {
             scheduled: true,
-            timezone: 'Asia/Ho_Chi_Minh'
+            timezone: timezone
         });
 
         // Tính toán thời gian chạy tiếp theo
@@ -37,17 +69,28 @@ class XSMBSchedulerService {
      * Tính toán thời gian chạy tiếp theo
      */
     calculateNextRun() {
-        const now = new Date();
-        const nextRun = new Date();
-        nextRun.setHours(18, 35, 0, 0);
+        // Sử dụng giá trị từ cấu hình thay vì hardcode
+        const hour = this.scheduledHour || 18;
+        const minute = this.scheduledMinute || 35;
+        const timezone = this.timezone || 'Asia/Ho_Chi_Minh';
 
-        // Nếu đã qua 18:35 hôm nay, lên lịch cho ngày mai
-        if (now > nextRun) {
-            nextRun.setDate(nextRun.getDate() + 1);
+        // Lấy thời gian hiện tại theo timezone
+        const now = new Date();
+        const nowStr = now.toLocaleString('en-US', { timeZone: timezone });
+        const nowInTimezone = new Date(nowStr);
+
+        // Tạo thời gian scheduled cho hôm nay
+        const todayScheduled = new Date(nowInTimezone);
+        todayScheduled.setHours(hour, minute, 0, 0);
+
+        // Nếu đã qua thời gian hôm nay, lên lịch cho ngày mai
+        if (nowInTimezone >= todayScheduled) {
+            todayScheduled.setDate(todayScheduled.getDate() + 1);
         }
 
-        this.nextRun = nextRun.toLocaleString('vi-VN', {
-            timeZone: 'Asia/Ho_Chi_Minh',
+        // Format để hiển thị
+        this.nextRun = todayScheduled.toLocaleString('vi-VN', {
+            timeZone: timezone,
             year: 'numeric',
             month: '2-digit',
             day: '2-digit',
@@ -159,7 +202,9 @@ class XSMBSchedulerService {
             isScheduled: this.scheduledJob ? this.scheduledJob.running : false,
             lastRun: this.lastRun,
             nextRun: this.nextRun,
-            timezone: 'Asia/Ho_Chi_Minh'
+            scheduledHour: this.scheduledHour,
+            scheduledMinute: this.scheduledMinute,
+            timezone: this.timezone
         };
     }
 
@@ -167,12 +212,19 @@ class XSMBSchedulerService {
      * Kiểm tra xem có nên chạy scraper không (dựa trên thời gian)
      */
     shouldRunNow() {
+        const timezone = this.timezone || 'Asia/Ho_Chi_Minh';
         const now = new Date();
-        const currentHour = now.getHours();
-        const currentMinute = now.getMinutes();
+        
+        // Lấy thời gian hiện tại theo timezone đã cấu hình
+        const nowInTimezone = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+        const currentHour = nowInTimezone.getHours();
+        const currentMinute = nowInTimezone.getMinutes();
 
-        // Chạy từ 18:35 đến 19:00
-        return currentHour === 18 && currentMinute >= 35 && currentMinute <= 59;
+        const scheduledHour = this.scheduledHour || 18;
+        const scheduledMinute = this.scheduledMinute || 35;
+
+        // Chạy trong khoảng từ scheduled time đến cuối giờ
+        return currentHour === scheduledHour && currentMinute >= scheduledMinute && currentMinute <= 59;
     }
 
     /**
