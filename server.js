@@ -82,31 +82,47 @@ app.use(cors({
         // Check for subdomain matches (e.g., www.taodandewukong.pro matches taodandewukong.pro)
         // Also allow cross-subdomain requests (e.g., www.taodandewukong.pro can call api1.taodandewukong.pro)
         const isSubdomainMatch = allowedOrigins.some(allowedOrigin => {
-            if (allowedOrigin.includes('.')) {
-                const domain = allowedOrigin.replace(/^https?:\/\//, '');
-                const requestDomain = origin.replace(/^https?:\/\//, '');
+            if (!allowedOrigin || allowedOrigin === '*') return false;
 
-                // Exact match
-                if (requestDomain === domain) return true;
+            const domain = allowedOrigin.replace(/^https?:\/\//, '').toLowerCase();
+            const requestDomain = origin.replace(/^https?:\/\//, '').toLowerCase();
 
-                // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
-                if (requestDomain.endsWith('.' + domain)) return true;
+            // Exact match
+            if (requestDomain === domain) {
+                console.log('✅ Exact domain match:', requestDomain, '===', domain);
+                return true;
+            }
 
-                // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
-                if (domain.endsWith('.' + requestDomain)) return true;
+            // Extract root domain (last 2 parts: e.g., "taodandewukong.pro")
+            const requestParts = requestDomain.split('.');
+            const domainParts = domain.split('.');
 
-                // Check if both are subdomains of the same root domain
-                // This allows www.taodandewukong.pro to call api1.taodandewukong.pro
-                const requestParts = requestDomain.split('.');
-                const domainParts = domain.split('.');
+            if (requestParts.length >= 2 && domainParts.length >= 2) {
+                const requestRoot = requestParts.slice(-2).join('.');
+                const domainRoot = domainParts.slice(-2).join('.');
 
-                if (requestParts.length >= 2 && domainParts.length >= 2) {
-                    const requestRoot = requestParts.slice(-2).join('.');
-                    const domainRoot = domainParts.slice(-2).join('.');
-                    // Allow if same root domain (e.g., both end with .taodandewukong.pro)
-                    if (requestRoot === domainRoot) return true;
+                // Allow if same root domain (e.g., both end with .taodandewukong.pro)
+                // This allows www.taodandewukong.pro, api1.taodandewukong.pro, etc. to work together
+                if (requestRoot === domainRoot) {
+                    console.log('✅ Same root domain match:', requestRoot, '===', domainRoot);
+                    console.log('   Request domain:', requestDomain);
+                    console.log('   Allowed domain:', domain);
+                    return true;
                 }
             }
+
+            // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
+            if (requestDomain.endsWith('.' + domain)) {
+                console.log('✅ Subdomain match (request ends with domain):', requestDomain, 'ends with', domain);
+                return true;
+            }
+
+            // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
+            if (domain.endsWith('.' + requestDomain)) {
+                console.log('✅ Reverse subdomain match (domain ends with request):', domain, 'ends with', requestDomain);
+                return true;
+            }
+
             return false;
         });
 
@@ -147,33 +163,35 @@ app.options('*', cors());
 app.use((req, res, next) => {
     const origin = req.headers.origin;
 
-    // Check if origin is allowed
+    // Check if origin is allowed (same logic as CORS middleware)
     const isAllowedOrigin = allowedOrigins.includes('*') ||
         allowedOrigins.includes(origin) ||
         (origin && allowedOrigins.some(allowedOrigin => {
-            if (allowedOrigin.includes('.')) {
-                const domain = allowedOrigin.replace(/^https?:\/\//, '');
-                const requestDomain = origin.replace(/^https?:\/\//, '');
+            if (!allowedOrigin || allowedOrigin === '*') return false;
 
-                // Exact match
-                if (requestDomain === domain) return true;
+            const domain = allowedOrigin.replace(/^https?:\/\//, '').toLowerCase();
+            const requestDomain = origin.replace(/^https?:\/\//, '').toLowerCase();
 
-                // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
-                if (requestDomain.endsWith('.' + domain)) return true;
+            // Exact match
+            if (requestDomain === domain) return true;
 
-                // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
-                if (domain.endsWith('.' + requestDomain)) return true;
+            // Extract root domain (last 2 parts)
+            const requestParts = requestDomain.split('.');
+            const domainParts = domain.split('.');
 
-                // Check if both are subdomains of the same root domain
-                const requestParts = requestDomain.split('.');
-                const domainParts = domain.split('.');
-
-                if (requestParts.length >= 2 && domainParts.length >= 2) {
-                    const requestRoot = requestParts.slice(-2).join('.');
-                    const domainRoot = domainParts.slice(-2).join('.');
-                    return requestRoot === domainRoot;
-                }
+            if (requestParts.length >= 2 && domainParts.length >= 2) {
+                const requestRoot = requestParts.slice(-2).join('.');
+                const domainRoot = domainParts.slice(-2).join('.');
+                // Allow if same root domain
+                if (requestRoot === domainRoot) return true;
             }
+
+            // Subdomain match
+            if (requestDomain.endsWith('.' + domain)) return true;
+
+            // Reverse subdomain match
+            if (domain.endsWith('.' + requestDomain)) return true;
+
             return false;
         }));
 
