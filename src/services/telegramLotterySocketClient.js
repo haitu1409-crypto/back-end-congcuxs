@@ -29,30 +29,76 @@ class TelegramLotterySocketClient {
         }
 
         // Get socket URL từ env hoặc default
-        // Ưu tiên SOCKET_URL, sau đó API_URL, cuối cùng là localhost
+        // Ưu tiên: SOCKET_URL > API_URL > RENDER_EXTERNAL_URL > tự động detect từ URL hiện tại
         let SOCKET_URL = process.env.SOCKET_URL || 
             process.env.API_URL || 
             null;
 
-        // Nếu không có URL từ env, cố gắng xây dựng từ PORT hoặc sử dụng localhost
+        // Nếu không có URL từ env, thử detect từ các environment variables của cloud providers
+        if (!SOCKET_URL) {
+            // Render.com cung cấp RENDER_EXTERNAL_URL
+            if (process.env.RENDER_EXTERNAL_URL) {
+                SOCKET_URL = process.env.RENDER_EXTERNAL_URL;
+            }
+            // Vercel, Railway, và các platforms khác có thể có PORT và URL
+            else if (process.env.NODE_ENV === 'production') {
+                // Trong production, cố gắng detect từ các env variables phổ biến
+                const possibleUrls = [
+                    process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : null,
+                    process.env.HEROKU_APP_NAME ? `https://${process.env.HEROKU_APP_NAME}.herokuapp.com` : null,
+                    // Có thể thêm các platforms khác ở đây
+                ].filter(Boolean);
+
+                if (possibleUrls.length > 0) {
+                    SOCKET_URL = possibleUrls[0];
+                    console.log(`[TelegramLotterySocket] 🔍 Auto-detected URL: ${SOCKET_URL}`);
+                } else {
+                    // Trong production, nếu không detect được, log warning và dùng localhost với http
+                    console.warn('[TelegramLotterySocket] ⚠️ Production mode nhưng không có SOCKET_URL/API_URL');
+                    console.warn('[TelegramLotterySocket] ⚠️ Vui lòng set SOCKET_URL hoặc API_URL trong environment variables');
+                    console.warn('[TelegramLotterySocket] ⚠️ Ví dụ: SOCKET_URL=https://api1.taodandewukong.pro');
+                    
+                    // Trong production, không nên dùng localhost, nhưng để tránh crash, vẫn thử kết nối nội bộ
+                    // Nếu đang chạy trên cùng server, có thể dùng 127.0.0.1 với http
+                    const PORT = process.env.PORT || 5000;
+                    SOCKET_URL = `http://127.0.0.1:${PORT}`;
+                    console.log(`[TelegramLotterySocket] 🔄 Fallback to internal connection: ${SOCKET_URL}`);
+                }
+            }
+        }
+
+        // Nếu vẫn chưa có URL, chỉ dùng localhost cho development
         if (!SOCKET_URL) {
             const PORT = process.env.PORT || 5000;
             const HOST = process.env.HOST || 'localhost';
-            const PROTOCOL = process.env.NODE_ENV === 'production' ? 'https' : 'http';
+            const PROTOCOL = 'http'; // Localhost luôn dùng http
             SOCKET_URL = `${PROTOCOL}://${HOST}:${PORT}`;
         }
 
         // Normalize URL - loại bỏ trailing slash
         SOCKET_URL = SOCKET_URL.replace(/\/$/, '');
 
-        // Normalize URL
+        // Normalize URL - convert ws:// to http://, wss:// to https://
         if (SOCKET_URL.startsWith('ws://')) {
             SOCKET_URL = SOCKET_URL.replace('ws://', 'http://');
         } else if (SOCKET_URL.startsWith('wss://')) {
             SOCKET_URL = SOCKET_URL.replace('wss://', 'https://');
         }
 
+        // Trong production, nếu URL có chứa 'localhost', thử thay thế bằng 127.0.0.1 với http
+        // vì localhost với https sẽ không hoạt động
+        if (process.env.NODE_ENV === 'production' && SOCKET_URL.includes('localhost')) {
+            const PORT = process.env.PORT || 5000;
+            console.warn('[TelegramLotterySocket] ⚠️ Production mode phát hiện localhost, chuyển sang kết nối nội bộ');
+            SOCKET_URL = `http://127.0.0.1:${PORT}`;
+        }
+
         console.log('[TelegramLotterySocket] 🔌 Connecting to lottery socket server:', SOCKET_URL);
+        console.log('[TelegramLotterySocket] 📝 Environment variables:');
+        console.log('[TelegramLotterySocket]    - SOCKET_URL:', process.env.SOCKET_URL || 'not set');
+        console.log('[TelegramLotterySocket]    - API_URL:', process.env.API_URL || 'not set');
+        console.log('[TelegramLotterySocket]    - RENDER_EXTERNAL_URL:', process.env.RENDER_EXTERNAL_URL || 'not set');
+        console.log('[TelegramLotterySocket]    - NODE_ENV:', process.env.NODE_ENV || 'not set');
 
         // Connect to /lottery namespace (không cần auth)
         this.socket = io(`${SOCKET_URL}/lottery`, {
