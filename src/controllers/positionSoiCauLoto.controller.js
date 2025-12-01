@@ -285,13 +285,38 @@ const getPositionPatternStatsLoto = async (req, res) => {
 };
 
 /**
+ * Wrapper với timeout để tránh memory crash
+ */
+const withTimeout = (promise, timeoutMs, errorMessage = 'Operation timeout') => {
+    return Promise.race([
+        promise,
+        new Promise((_, reject) => 
+            setTimeout(() => reject(new Error(errorMessage)), timeoutMs)
+        )
+    ]);
+};
+
+/**
  * Kiểm tra và cập nhật soi cầu tự động
  * Kiểm tra xem kết quả xổ số hôm nay đã có chưa, nếu có thì tính toán soi cầu cho ngày mai
+ * Thêm timeout và error handling để tránh memory crash
  */
 const checkAndUpdateSoiCau = async (req, res) => {
+    const TIMEOUT_MS = 120000; // 2 phút timeout để tránh memory crash
+    const startTime = Date.now();
+    
     try {
         const XSMB = require('../models/xsmb.model');
         const numDays = parseInt(req.query.days) || 4;
+
+        // Validate numDays để tránh quá tải
+        if (numDays > 10) {
+            return res.status(400).json({
+                success: false,
+                error: 'Số ngày phân tích không được vượt quá 10 để tránh quá tải bộ nhớ',
+                message: 'Vui lòng chọn số ngày nhỏ hơn hoặc bằng 10'
+            });
+        }
 
         // Lấy ngày hôm nay
         const today = new Date();
@@ -335,55 +360,88 @@ const checkAndUpdateSoiCau = async (req, res) => {
             });
         }
 
-        // Tính toán soi cầu cho ngày mai
-        console.log(`🎯 [Cập nhật] Bắt đầu tính toán soi cầu cho ngày ${tomorrowFormatted}, ${numDays} ngày`);
+        // Tính toán soi cầu cho ngày mai với timeout
+        console.log(`🎯 [Cập nhật] Bắt đầu tính toán soi cầu cho ngày ${tomorrowFormatted}, ${numDays} ngày (timeout: ${TIMEOUT_MS}ms)`);
 
-        const result = await positionAnalyzer.analyzePositionSoiCau(tomorrowFormatted, numDays, {
-            mode: 'loto'
-        });
+        try {
+            const result = await withTimeout(
+                positionAnalyzer.analyzePositionSoiCau(tomorrowFormatted, numDays, {
+                    mode: 'loto'
+                }),
+                TIMEOUT_MS,
+                `Tính toán soi cầu vượt quá thời gian cho phép (${TIMEOUT_MS}ms). Có thể do dữ liệu quá lớn hoặc server quá tải.`
+            );
 
-        console.log(`✅ [Cập nhật] Hoàn thành soi cầu vị trí cho ngày ${tomorrowFormatted}: ${result.predictions.length} dự đoán`);
+            const elapsedTime = Date.now() - startTime;
+            console.log(`✅ [Cập nhật] Hoàn thành soi cầu vị trí cho ngày ${tomorrowFormatted}: ${result.predictions.length} dự đoán (${elapsedTime}ms)`);
 
-        // Lưu vào database
-        const cacheData = structuredClone ? structuredClone(result) : JSON.parse(JSON.stringify(result));
-        delete cacheData.detailedAnalysis;
-        delete cacheData.patterns;
-        delete cacheData.consistentPatterns;
+            // Lưu vào database với error handling
+            try {
+                const cacheData = structuredClone ? structuredClone(result) : JSON.parse(JSON.stringify(result));
+                delete cacheData.detailedAnalysis;
+                delete cacheData.patterns;
+                delete cacheData.consistentPatterns;
 
-        await PositionSoiCauLotoResult.findOneAndUpdate(
-            {
-                analysisDate: tomorrowFormatted,
-                analysisDays: numDays
-            },
-            {
-                analysisDate: tomorrowFormatted,
-                analysisDateObj: tomorrow,
-                analysisDays: numDays,
-                mode: 'loto',
-                data: cacheData,
-                lastCalculatedAt: new Date()
-            },
-            {
-                upsert: true,
-                new: true,
-                setDefaultsOnInsert: true
+                await PositionSoiCauLotoResult.findOneAndUpdate(
+                    {
+                        analysisDate: tomorrowFormatted,
+                        analysisDays: numDays
+                    },
+                    {
+                        analysisDate: tomorrowFormatted,
+                        analysisDateObj: tomorrow,
+                        analysisDays: numDays,
+                        mode: 'loto',
+                        data: cacheData,
+                        lastCalculatedAt: new Date()
+                    },
+                    {
+                        upsert: true,
+                        new: true,
+                        setDefaultsOnInsert: true
+                    }
+                );
+            } catch (dbError) {
+                console.error('❌ [Cập nhật] Lỗi khi lưu vào database:', dbError.message);
+                // Vẫn trả về kết quả dù lưu DB lỗi
             }
-        );
 
-        return res.status(200).json({
-            success: true,
-            message: `Đã cập nhật soi cầu cho ngày ${tomorrowFormatted}`,
-            todayDate: formatDate(today),
-            tomorrowDate: tomorrowFormatted,
-            hasResult: true,
-            alreadyExists: false,
-            prediction: result,
-            predictionsCount: result.predictions?.length || 0
-        });
+            return res.status(200).json({
+                success: true,
+                message: `Đã cập nhật soi cầu cho ngày ${tomorrowFormatted}`,
+                todayDate: formatDate(today),
+                tomorrowDate: tomorrowFormatted,
+                hasResult: true,
+                alreadyExists: false,
+                prediction: result,
+                predictionsCount: result.predictions?.length || 0
+            });
+        } catch (timeoutError) {
+            console.error('❌ [Cập nhật] Timeout hoặc lỗi khi tính toán:', timeoutError.message);
+            return res.status(500).json({
+                success: false,
+                error: timeoutError.message || 'Tính toán soi cầu vượt quá thời gian cho phép',
+                message: 'Server đang quá tải hoặc dữ liệu quá lớn. Vui lòng thử lại sau hoặc giảm số ngày phân tích.',
+                suggestion: 'Thử giảm số ngày phân tích xuống 2-4 ngày'
+            });
+        }
 
     } catch (error) {
-        console.error('❌ Lỗi trong checkAndUpdateSoiCau:', error.message);
-        res.status(500).json({
+        const elapsedTime = Date.now() - startTime;
+        console.error(`❌ [Cập nhật] Lỗi trong checkAndUpdateSoiCau (${elapsedTime}ms):`, error.message);
+        console.error('Stack trace:', error.stack);
+        
+        // Kiểm tra nếu là memory error
+        if (error.message.includes('memory') || error.message.includes('Memory') || error.message.includes('heap')) {
+            return res.status(500).json({
+                success: false,
+                error: 'Server hết bộ nhớ khi xử lý yêu cầu',
+                message: 'Dữ liệu quá lớn. Vui lòng thử lại sau hoặc giảm số ngày phân tích.',
+                suggestion: 'Thử giảm số ngày phân tích xuống 2-4 ngày'
+            });
+        }
+        
+        return res.status(500).json({
             success: false,
             error: `Lỗi server: ${error.message}`,
             message: 'Không thể cập nhật soi cầu tự động'

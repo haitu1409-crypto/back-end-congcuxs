@@ -80,6 +80,7 @@ app.use(cors({
         }
 
         // Check for subdomain matches (e.g., www.taodandewukong.pro matches taodandewukong.pro)
+        // Also allow cross-subdomain requests (e.g., www.taodandewukong.pro can call api1.taodandewukong.pro)
         const isSubdomainMatch = allowedOrigins.some(allowedOrigin => {
             if (allowedOrigin.includes('.')) {
                 const domain = allowedOrigin.replace(/^https?:\/\//, '');
@@ -95,13 +96,15 @@ app.use(cors({
                 if (domain.endsWith('.' + requestDomain)) return true;
 
                 // Check if both are subdomains of the same root domain
+                // This allows www.taodandewukong.pro to call api1.taodandewukong.pro
                 const requestParts = requestDomain.split('.');
                 const domainParts = domain.split('.');
 
                 if (requestParts.length >= 2 && domainParts.length >= 2) {
                     const requestRoot = requestParts.slice(-2).join('.');
                     const domainRoot = domainParts.slice(-2).join('.');
-                    return requestRoot === domainRoot;
+                    // Allow if same root domain (e.g., both end with .taodandewukong.pro)
+                    if (requestRoot === domainRoot) return true;
                 }
             }
             return false;
@@ -439,7 +442,7 @@ app.use('/uploads', (req, res, next) => {
 }, express.static('uploads', {
     setHeaders: (res, path) => {
         // Set cache headers for images
-        if (path.endsWith('.png') || path.endsWith('.jpg') || path.endsWith('.jpeg') || 
+        if (path.endsWith('.png') || path.endsWith('.jpg') || path.endsWith('.jpeg') ||
             path.endsWith('.gif') || path.endsWith('.webp')) {
             res.setHeader('Cache-Control', 'public, max-age=3600');
         }
@@ -511,7 +514,7 @@ const startServer = async () => {
                             connectTimeout: 2000 // Giảm timeout xuống 2 giây
                         }
                     });
-                    
+
                     redisClient.on('error', (err) => {
                         if (!redisErrorLogged) {
                             console.warn('⚠️ Redis connection error:', err.message);
@@ -519,12 +522,12 @@ const startServer = async () => {
                             redisErrorLogged = true;
                         }
                     });
-                    
+
                     redisClient.on('connect', () => {
                         console.log('✅ Redis connected for caching');
                         redisErrorLogged = false;
                     });
-                    
+
                     // Try to connect với timeout ngắn hơn
                     await Promise.race([
                         redisClient.connect(),

@@ -69,13 +69,28 @@ router.get('/stats', statsLimiter, async (req, res) => {
     await getPositionPatternStatsLoto(req, res);
 });
 
+// Rate limiter riêng cho check-update (nghiêm ngặt hơn vì đây là operation nặng)
+const checkUpdateLimiter = rateLimit({
+    windowMs: 5 * 60 * 1000, // 5 phút
+    max: process.env.NODE_ENV === 'development' ? 10 : 3, // Tối đa 3 requests/5 phút trong production
+    message: 'Quá nhiều yêu cầu cập nhật soi cầu. Vui lòng đợi 5 phút trước khi thử lại.',
+    keyGenerator: (req) => req.headers['x-user-id'] || req.ip,
+    skip: (req) => {
+        // Skip rate limit cho localhost trong development
+        return process.env.NODE_ENV === 'development' &&
+            (req.ip === '127.0.0.1' || req.ip === '::1' || req.ip === '::ffff:127.0.0.1');
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
+});
+
 /**
  * @route POST /api/position-soicau-loto/check-update
  * @desc Kiểm tra và cập nhật soi cầu tự động
- * @query {number} days - Số ngày phân tích (2-30, default: 4)
+ * @query {number} days - Số ngày phân tích (2-10, default: 4) - Giới hạn 10 để tránh memory crash
  * @access Public
  */
-router.post('/check-update', positionSoiCauLimiter, async (req, res) => {
+router.post('/check-update', checkUpdateLimiter, async (req, res) => {
     await checkAndUpdateSoiCau(req, res);
 });
 
