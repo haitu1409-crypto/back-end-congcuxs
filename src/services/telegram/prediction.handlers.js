@@ -1060,6 +1060,8 @@ function buildTwoColumnHistoryWithMiss(entries = []) {
 
 // Map để lưu message_ids theo từng loại lệnh và chatId cho prediction handlers
 const predictionCommandMessageIds = new Map();
+// Map để lưu timeout cho từng message_id (để xóa sau 5 phút)
+const predictionMessageTimeouts = new Map();
 
 /**
  * Xóa các tin nhắn cũ của cùng một loại lệnh và lưu tin nhắn mới
@@ -1068,8 +1070,17 @@ async function deleteOldPredictionCommandMessages(chatId, commandType, newMessag
     const key = `${chatId}:${commandType}`;
     const oldMessageIds = predictionCommandMessageIds.get(key) || [];
 
-    // Xóa các tin nhắn cũ
+    // Hủy timeout và xóa các tin nhắn cũ
     for (const oldMessageId of oldMessageIds) {
+        // Hủy timeout nếu có
+        const timeoutKey = `${chatId}:${oldMessageId}`;
+        const timeout = predictionMessageTimeouts.get(timeoutKey);
+        if (timeout) {
+            clearTimeout(timeout);
+            predictionMessageTimeouts.delete(timeoutKey);
+        }
+
+        // Xóa tin nhắn cũ ngay lập tức
         try {
             await telegram.deleteMessage(chatId, oldMessageId);
         } catch (error) {
@@ -1082,9 +1093,47 @@ async function deleteOldPredictionCommandMessages(chatId, commandType, newMessag
 }
 
 /**
- * Helper function để reply và tự động xóa tin nhắn cũ
+ * Đặt timeout để xóa tin nhắn sau 5 phút
  */
-async function replyAndCleanOldPrediction(ctx, commandType, text, options = {}) {
+function scheduleMessageDeletion(chatId, messageId, telegram, commandType) {
+    const timeoutKey = `${chatId}:${messageId}`;
+    
+    // Hủy timeout cũ nếu có (trường hợp có thông báo mới thay thế)
+    const existingTimeout = predictionMessageTimeouts.get(timeoutKey);
+    if (existingTimeout) {
+        clearTimeout(existingTimeout);
+    }
+
+    // Đặt timeout 5 phút (300000ms) để xóa tin nhắn
+    const timeout = setTimeout(async () => {
+        try {
+            await telegram.deleteMessage(chatId, messageId);
+            console.log(`[Prediction] ✅ Đã tự động xóa tin nhắn ${messageId} sau 5 phút (chat: ${chatId}, type: ${commandType})`);
+            
+            // Xóa khỏi Map
+            predictionMessageTimeouts.delete(timeoutKey);
+            const key = `${chatId}:${commandType}`;
+            const messageIds = predictionCommandMessageIds.get(key) || [];
+            const updatedMessageIds = messageIds.filter(id => id !== messageId);
+            if (updatedMessageIds.length === 0) {
+                predictionCommandMessageIds.delete(key);
+            } else {
+                predictionCommandMessageIds.set(key, updatedMessageIds);
+            }
+        } catch (error) {
+            console.log(`[Prediction] Không thể xóa tin nhắn ${messageId} sau 5 phút: ${error.message}`);
+            predictionMessageTimeouts.delete(timeoutKey);
+        }
+    }, 5 * 60 * 1000); // 5 phút = 300000ms
+
+    predictionMessageTimeouts.set(timeoutKey, timeout);
+}
+
+/**
+ * Helper function để reply và tự động xóa tin nhắn cũ
+ * @param {boolean} autoDeleteAfter5Min - Nếu true, sẽ tự động xóa tin nhắn sau 5 phút
+ */
+async function replyAndCleanOldPrediction(ctx, commandType, text, options = {}, autoDeleteAfter5Min = false) {
     const chatId = ctx.chat?.id;
     if (!chatId) {
         return ctx.reply(text, options);
@@ -1094,6 +1143,11 @@ async function replyAndCleanOldPrediction(ctx, commandType, text, options = {}) 
 
     if (sentMessage && sentMessage.message_id) {
         await deleteOldPredictionCommandMessages(chatId, commandType, sentMessage.message_id, ctx.telegram);
+        
+        // Nếu cần tự động xóa sau 5 phút
+        if (autoDeleteAfter5Min) {
+            scheduleMessageDeletion(chatId, sentMessage.message_id, ctx.telegram, commandType);
+        }
     }
 
     return sentMessage;
@@ -1268,12 +1322,15 @@ function createPredictionHandlers({ xsmbModel }) {
                 : 'N/A';
 
             const dateDisplay = formatDateForDisplay(normalizedDate);
-            await ctx.reply(
+            await replyAndCleanOldPrediction(
+                ctx,
+                'soicau_dangky_thanhcong',
                 `<b>✅ THÀNH CÔNG</b>\n\n` +
                 `<b>👤 Người đăng ký:</b> ${userMention}\n\n` +
                 `<i>Đã ghi nhận dàn:</i> <b>${danList}</b>\n` +
                 `<i>📅 Ngày:</i> <b>${dateDisplay}</b>`,
-                { parse_mode: 'HTML' }
+                { parse_mode: 'HTML' },
+                true // Tự động xóa sau 5 phút
             );
 
             // Gửi thống kê trúng số của người dùng sau khi đăng ký thành công
@@ -1853,7 +1910,7 @@ function createPredictionHandlers({ xsmbModel }) {
         }
 
         try {
-            await ctx.reply(await buildResultMessage(summary, normalizedDate, chatId, oldScoresMap), { parse_mode: 'HTML' });
+            await replyAndCleanOldPrediction(ctx, 'soicau_ketqua', await buildResultMessage(summary, normalizedDate, chatId, oldScoresMap), { parse_mode: 'HTML' });
             await markResultsNotified(String(chatId), normalizedDate);
             console.log(`[Prediction] ✅ Đã gửi thông báo kết quả dự đoán cho chat ${chatId}, ngày ${normalizedDate}`);
         } catch (error) {
@@ -1916,7 +1973,7 @@ function createPredictionHandlers({ xsmbModel }) {
         }
 
         try {
-            await ctx.reply(await buildResultMessage(summary, normalizedDate, chatId, oldScoresMap), { parse_mode: 'HTML' });
+            await replyAndCleanOldPrediction(ctx, 'soicau_ketqua', await buildResultMessage(summary, normalizedDate, chatId, oldScoresMap), { parse_mode: 'HTML' });
             // Đánh dấu đã thông báo sau khi gửi thành công
             await markResultsNotified(String(chatId), normalizedDate);
             console.log(`[Prediction] ✅ Đã force gửi thông báo kết quả dự đoán cho chat ${chatId}, ngày ${normalizedDate}`);
