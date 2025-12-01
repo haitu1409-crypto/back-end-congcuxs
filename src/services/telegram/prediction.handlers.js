@@ -744,26 +744,21 @@ async function buildResultMessage(summary, normalizedDate, chatId, oldScoresMap 
 
     message += `\n<b>🎉 DANH SÁCH TRÚNG SỐ</b>\n`;
     message += `<i>──────────────</i>\n`;
-    message += `‼️Ấn vô để copy lệnh + gửi lệnh để xem kết quả đăng ký của người đó\n`;
 
     summary.hits.forEach((hit, index) => {
         const mention = formatUserMention(hit);
         const label = hit.matchedLabel ? ` <i>(${hit.matchedLabel})</i>` : '';
-        const numbers = hit.matchedNumbers.join(', ');
-        message += `\n<b>${index + 1}. ${mention}</b>${label}\n`;
-        message += `   <code>${numbers}</code>\n`;
-
-        const chamResultLines = formatChamResultSummary(hit.groups, summary.specialTarget, hit.matchedChamLabels);
-        if (chamResultLines.length) {
-            chamResultLines.forEach(line => {
-                message += `   ${line}\n`;
-            });
-        }
+        message += `<b>${index + 1}. ${mention}</b>${label}`;
 
         // Thêm lệnh để xem chi tiết
         const username = hit.username || (hit.userUsername ? hit.userUsername.replace(/^@/, '') : null);
         if (username) {
-            message += `   <code>soicau @${username}</code>`;
+            message += `\n   <code>soicau @${username}</code>`;
+        }
+        
+        // Thêm newline sau mỗi user (trừ user cuối) để ngăn cách nhưng không có dòng trống
+        if (index < summary.hits.length - 1 || summary.scoreChanges?.length) {
+            message += '\n';
         }
     });
 
