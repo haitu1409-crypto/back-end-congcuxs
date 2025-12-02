@@ -1076,8 +1076,10 @@ const predictionMessageTimeouts = new Map();
 /**
  * Xóa các tin nhắn cũ của cùng một loại lệnh và lưu tin nhắn mới
  */
-async function deleteOldPredictionCommandMessages(chatId, commandType, newMessageId, telegram) {
-    const key = `${chatId}:${commandType}`;
+async function deleteOldPredictionCommandMessages(chatId, commandType, newMessageId, telegram, userId = null) {
+    // Nếu có userId (dành cho thông báo chi tiết user), sử dụng key bao gồm userId
+    // Chỉ xóa tin nhắn cũ của user đó
+    const key = userId ? `${chatId}:${commandType}:${userId}` : `${chatId}:${commandType}`;
     const oldMessageIds = predictionCommandMessageIds.get(key) || [];
 
     // Hủy timeout và xóa các tin nhắn cũ
@@ -1105,7 +1107,7 @@ async function deleteOldPredictionCommandMessages(chatId, commandType, newMessag
 /**
  * Đặt timeout để xóa tin nhắn sau 5 phút
  */
-function scheduleMessageDeletion(chatId, messageId, telegram, commandType) {
+function scheduleMessageDeletion(chatId, messageId, telegram, commandType, userId = null) {
     const timeoutKey = `${chatId}:${messageId}`;
     
     // Hủy timeout cũ nếu có (trường hợp có thông báo mới thay thế)
@@ -1122,7 +1124,7 @@ function scheduleMessageDeletion(chatId, messageId, telegram, commandType) {
             
             // Xóa khỏi Map
             predictionMessageTimeouts.delete(timeoutKey);
-            const key = `${chatId}:${commandType}`;
+            const key = userId ? `${chatId}:${commandType}:${userId}` : `${chatId}:${commandType}`;
             const messageIds = predictionCommandMessageIds.get(key) || [];
             const updatedMessageIds = messageIds.filter(id => id !== messageId);
             if (updatedMessageIds.length === 0) {
@@ -1179,8 +1181,9 @@ function scheduleMessageDeletion1Min(chatId, messageId, telegram, commandType) {
 /**
  * Helper function để reply và tự động xóa tin nhắn cũ
  * @param {boolean} autoDeleteAfter5Min - Nếu true, sẽ tự động xóa tin nhắn sau 5 phút
+ * @param {string} userId - Optional: Nếu có, chỉ xóa tin nhắn cũ của user này
  */
-async function replyAndCleanOldPrediction(ctx, commandType, text, options = {}, autoDeleteAfter5Min = false) {
+async function replyAndCleanOldPrediction(ctx, commandType, text, options = {}, autoDeleteAfter5Min = false, userId = null) {
     const chatId = ctx.chat?.id;
     if (!chatId) {
         return ctx.reply(text, options);
@@ -1189,11 +1192,11 @@ async function replyAndCleanOldPrediction(ctx, commandType, text, options = {}, 
     const sentMessage = await ctx.reply(text, options);
 
     if (sentMessage && sentMessage.message_id) {
-        await deleteOldPredictionCommandMessages(chatId, commandType, sentMessage.message_id, ctx.telegram);
+        await deleteOldPredictionCommandMessages(chatId, commandType, sentMessage.message_id, ctx.telegram, userId);
         
         // Nếu cần tự động xóa sau 5 phút
         if (autoDeleteAfter5Min) {
-            scheduleMessageDeletion(chatId, sentMessage.message_id, ctx.telegram, commandType);
+            scheduleMessageDeletion(chatId, sentMessage.message_id, ctx.telegram, commandType, userId);
         }
     }
 
@@ -1851,7 +1854,7 @@ function createPredictionHandlers({ xsmbModel }) {
             const numbers = Array.isArray(prediction.numbers) ? prediction.numbers : [];
             const groups = Array.isArray(prediction.groups) ? prediction.groups : [];
 
-            let message = `<b>📋 CHI TIẾT DỰ ĐOÁN</b>\n\n`;
+            let message = `<b>📋 CHỐT DÀN MIỀN BẮC</b>\n\n`;
             message += `<b>👤 Người soi cầu MB:</b> ${displayName}\n`;
             message += `<b>📅 Ngày:</b> ${displayDate}\n\n`;
 
@@ -1935,7 +1938,9 @@ function createPredictionHandlers({ xsmbModel }) {
             }
 
             const finalMessage = removeEmptyLines(message);
-            return await replyAndCleanOldPrediction(ctx, commandType, finalMessage, { parse_mode: 'HTML' });
+            // Truyền userId để chỉ xóa tin nhắn cũ của user này
+            const userId = prediction.userId ? String(prediction.userId) : null;
+            return await replyAndCleanOldPrediction(ctx, commandType, finalMessage, { parse_mode: 'HTML' }, false, userId);
         } catch (error) {
             console.error('[Prediction] Lỗi xem chi tiết dự đoán:', error);
             return ctx.reply(
