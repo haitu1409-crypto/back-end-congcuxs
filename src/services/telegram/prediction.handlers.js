@@ -16,6 +16,21 @@ const { normalizeDateInput, formatDateForDisplay } = require('./date.utils');
 const PredictionScore = require('../../models/predictionScore.model');
 const UserPrediction = require('../../models/userPrediction.model');
 
+// Helper function để kiểm tra user có phải admin không
+function isAdmin(userId) {
+    if (!userId) return false;
+    const adminIds = process.env.TELEGRAM_ADMIN_ID;
+    if (!adminIds) return false;
+    
+    // Parse danh sách admin IDs (có thể là "8551427685, 6570193875" hoặc "8551427685,6570193875")
+    const adminIdList = adminIds
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean);
+    
+    return adminIdList.includes(String(userId));
+}
+
 const LETTER_REGEX = /[a-zA-ZÀ-ỹĐđ]/u;
 const ALL_TWO_DIGIT_NUMBERS = Array.from({ length: 100 }, (_, index) =>
     index.toString().padStart(2, '0')
@@ -1125,6 +1140,43 @@ function scheduleMessageDeletion(chatId, messageId, telegram, commandType) {
 }
 
 /**
+ * Đặt timeout để xóa tin nhắn sau 1 phút
+ */
+function scheduleMessageDeletion1Min(chatId, messageId, telegram, commandType) {
+    const timeoutKey = `${chatId}:${messageId}`;
+    
+    // Hủy timeout cũ nếu có (trường hợp có thông báo mới thay thế)
+    const existingTimeout = predictionMessageTimeouts.get(timeoutKey);
+    if (existingTimeout) {
+        clearTimeout(existingTimeout);
+    }
+
+    // Đặt timeout 1 phút (60000ms) để xóa tin nhắn
+    const timeout = setTimeout(async () => {
+        try {
+            await telegram.deleteMessage(chatId, messageId);
+            console.log(`[Prediction] ✅ Đã tự động xóa tin nhắn ${messageId} sau 1 phút (chat: ${chatId}, type: ${commandType})`);
+            
+            // Xóa khỏi Map
+            predictionMessageTimeouts.delete(timeoutKey);
+            const key = `${chatId}:${commandType}`;
+            const messageIds = predictionCommandMessageIds.get(key) || [];
+            const updatedMessageIds = messageIds.filter(id => id !== messageId);
+            if (updatedMessageIds.length === 0) {
+                predictionCommandMessageIds.delete(key);
+            } else {
+                predictionCommandMessageIds.set(key, updatedMessageIds);
+            }
+        } catch (error) {
+            console.log(`[Prediction] Không thể xóa tin nhắn ${messageId} sau 1 phút: ${error.message}`);
+            predictionMessageTimeouts.delete(timeoutKey);
+        }
+    }, 1 * 60 * 1000); // 1 phút = 60000ms
+
+    predictionMessageTimeouts.set(timeoutKey, timeout);
+}
+
+/**
  * Helper function để reply và tự động xóa tin nhắn cũ
  * @param {boolean} autoDeleteAfter5Min - Nếu true, sẽ tự động xóa tin nhắn sau 5 phút
  */
@@ -1292,6 +1344,38 @@ function createPredictionHandlers({ xsmbModel }) {
             }
 
             const { normalizedDate, drawDate, numbers, groups } = parseSubmissionArgs(args, hasManualDate);
+            
+            // Kiểm tra nếu có 20 cặp số trở lên, chỉ admin mới được đăng
+            if (numbers && numbers.length >= 20) {
+                if (!isAdmin(userId)) {
+                    // Xóa tin nhắn đăng ký soi cầu của người dùng
+                    try {
+                        if (ctx.message && ctx.message.message_id && chatId) {
+                            await ctx.telegram.deleteMessage(chatId, ctx.message.message_id);
+                        }
+                    } catch (deleteError) {
+                        console.log('[Prediction] Không thể xóa tin nhắn đăng ký:', deleteError.message);
+                    }
+                    
+                    // Sử dụng replyAndCleanOldPrediction để xóa thông báo cũ cùng loại và tự động xóa sau 1 phút
+                    const sentMessage = await replyAndCleanOldPrediction(
+                        ctx,
+                        'soicau_khong_quyen',
+                        `<b>❌ KHÔNG CÓ QUYỀN</b>\n\n` +
+                        `<i>Chỉ có người dùng cấp quyền mới được đăng dàn soi cầu.</i>`,
+                        { parse_mode: 'HTML' },
+                        false // Không dùng autoDeleteAfter5Min
+                    );
+                    
+                    // Schedule xóa sau 1 phút
+                    if (sentMessage && sentMessage.message_id && chatId) {
+                        scheduleMessageDeletion1Min(chatId, sentMessage.message_id, ctx.telegram, 'soicau_khong_quyen');
+                    }
+                    
+                    return sentMessage;
+                }
+            }
+            
             const { username, displayName } = getUserIdentifiers(ctx);
 
             await savePrediction({
