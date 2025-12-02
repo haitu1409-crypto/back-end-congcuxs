@@ -149,7 +149,7 @@ class XSMBScraperService {
         let errorCount = 0;
         const startTime = Date.now();
         const pollIntervalMs = isTestMode ? 1000 : 2000;
-        const liveWindowMinutes = isTestMode ? 1 : 18; // cần bám toàn bộ khung 18h14-18h32 (~18 phút)
+        const liveWindowMinutes = isTestMode ? 1 : 20; // cần bám toàn bộ khung 18h14-18h34 (~20 phút)
         const maxDuration = liveWindowMinutes * 60 * 1000;
         const maxIterations = Math.ceil(maxDuration / pollIntervalMs);
 

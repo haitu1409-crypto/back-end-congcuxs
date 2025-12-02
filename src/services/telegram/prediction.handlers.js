@@ -555,24 +555,27 @@ function parseSubmissionArgs(args, allowManualDate = false) {
         }
 
         if (normalizedDate) {
-            // Kiểm tra nếu ngày thủ công là hôm nay, vẫn phải kiểm tra giờ
-            const today = formatDateKey(new Date());
-            if (normalizedDate === today) {
-                const dateInfo = determinePredictionDate();
-                if (!dateInfo) {
-                    throw new Error('Hiện tại không thể đăng ký dự đoán cho hôm nay.\nThời gian đăng ký: Trước 18:00 hoặc sau 18:35.');
-                }
-            }
+            // TẠMTHỜI TẮT: Kiểm tra nếu ngày thủ công là hôm nay, vẫn phải kiểm tra giờ
+            // const today = formatDateKey(new Date());
+            // if (normalizedDate === today) {
+            //     const dateInfo = determinePredictionDate();
+            //     if (!dateInfo) {
+            //         throw new Error('Hiện tại không thể đăng ký dự đoán cho hôm nay.\nThời gian đăng ký: Trước 18:00 hoặc sau 18:35.');
+            //     }
+            // }
         }
     }
 
     if (!normalizedDate) {
-        // Nếu không có ngày thủ công, sử dụng logic tự động dựa trên giờ
-        const dateInfo = determinePredictionDate();
-        if (!dateInfo) {
-            throw new Error('Hiện tại không thể đăng ký dự đoán.\nThời gian đăng ký: Trước 18:00 hoặc sau 18:35.');
-        }
-        normalizedDate = dateInfo.normalizedDate;
+        // TẠMTHỜI TẮT: Nếu không có ngày thủ công, sử dụng logic tự động dựa trên giờ
+        // const dateInfo = determinePredictionDate();
+        // if (!dateInfo) {
+        //     throw new Error('Hiện tại không thể đăng ký dự đoán.\nThời gian đăng ký: Trước 18:00 hoặc sau 18:35.');
+        // }
+        // normalizedDate = dateInfo.normalizedDate;
+        
+        // Cho phép đăng ký mọi lúc - mặc định là hôm nay
+        normalizedDate = formatDateKey(new Date());
     }
 
     if (!tokens.length) {
@@ -695,8 +698,7 @@ function buildListMessage(predictions, normalizedDate) {
 
     let message = `<b>📋 DANH SÁCH DỰ ĐOÁN</b>\n`;
     message += `<i>📅 Ngày:</i> <b>${displayDate}</b>\n`;
-    message += `<i>👥 Tổng số người tham gia:</i> <b>${totalPredictions}</b>\n`;
-    message += `\n‼️Ấn vô để copy lệnh + gửi lệnh để xem kết quả đăng ký của người đó\n\n`;
+    message += `<i>👥 Tổng số người tham gia:</i> <b>${totalPredictions}</b>\n\n`;
 
     predictions.forEach((prediction, index) => {
         const userMention = formatUserMention(prediction);
@@ -708,7 +710,7 @@ function buildListMessage(predictions, normalizedDate) {
 
         message += `<b>${index + 1}.</b> ${userMention}\n`;
 
-        // Chỉ hiển thị danh sách các dàn (0X, 1X, 2X, ...)
+        // Hiển thị danh sách các dàn và chi tiết số
         if (prediction.groups && prediction.groups.length) {
             const danLabels = prediction.groups
                 .map(group => group.label || 'N/A')
@@ -722,14 +724,44 @@ function buildListMessage(predictions, normalizedDate) {
                     message += `\n   ${line}`;
                 });
             }
-        }
+            
+            // Thêm lệnh để xem chi tiết
+            if (identifier) {
+                message += ` : <code>soicau @${identifier}</code>`;
+            }
+            
+            message += `\n\n`;
 
-        // Thêm lệnh để xem chi tiết
-        if (identifier) {
-            message += ` : <code>soicau @${identifier}</code>`;
-        }
+            // Hiển thị số theo từng dàn
+            const groupLines = prediction.groups
+                .filter(group => group.groupType !== 'cham')
+                .map((group) => {
+                    const label = group.label || group.rawLabel || 'N/A';
+                    const groupNumbers = Array.isArray(group.numbers) ? group.numbers : [];
 
-        message += `\n\n`;
+                    if (groupNumbers.length > 0) {
+                        const numbersPerLine = 15;
+                        const lines = [];
+                        for (let i = 0; i < groupNumbers.length; i += numbersPerLine) {
+                            const lineNumbers = groupNumbers.slice(i, i + numbersPerLine);
+                            lines.push(lineNumbers.join(' '));
+                        }
+                        return `<b>${label}</b>\n${lines.join('\n')}`;
+                    }
+                    return '';
+                })
+                .filter(Boolean);
+            
+            if (groupLines.length) {
+                message += `${groupLines.join('\n\n')}\n\n`;
+            }
+        } else {
+            // Thêm lệnh để xem chi tiết nếu không có groups
+            if (identifier) {
+                message += ` : <code>soicau @${identifier}</code>`;
+            }
+            message += `\n\n`;
+        }
     });
 
     return message.trim();
@@ -1331,20 +1363,21 @@ function createPredictionHandlers({ xsmbModel }) {
             }
 
             // Nếu không có ngày thủ công, kiểm tra giờ hiện tại để tự động xác định ngày
-            if (!hasManualDate) {
-                const dateInfo = determinePredictionDate();
-                if (!dateInfo) {
-                    return ctx.reply(
-                        `<b>⏰ KHÔNG THỂ ĐĂNG KÝ</b>\n\n` +
-                        `<i>Hiện tại không thể đăng ký dự đoán.</i>\n\n` +
-                        `<b>📋 Thời gian đăng ký:</b>\n` +
-                        `• <b>Trước 18:00</b> ➜ Đăng ký cho <i>hôm nay</i>\n` +
-                        `• <b>Sau 18:35</b> ➜ Đăng ký cho <i>ngày mai</i>\n` +
-                        `• <b>18:00 - 18:35</b> ➜ <u>Không thể đăng ký</u>`,
-                        { parse_mode: 'HTML' }
-                    );
-                }
-            }
+            // TẠMTHỜI TẮT: Cho phép đăng ký mọi lúc
+            // if (!hasManualDate) {
+            //     const dateInfo = determinePredictionDate();
+            //     if (!dateInfo) {
+            //         return ctx.reply(
+            //             `<b>⏰ KHÔNG THỂ ĐĂNG KÝ</b>\n\n` +
+            //             `<i>Hiện tại không thể đăng ký dự đoán.</i>\n\n` +
+            //             `<b>📋 Thời gian đăng ký:</b>\n` +
+            //             `• <b>Trước 18:00</b> ➜ Đăng ký cho <i>hôm nay</i>\n` +
+            //             `• <b>Sau 18:35</b> ➜ Đăng ký cho <i>ngày mai</i>\n` +
+            //             `• <b>18:00 - 18:35</b> ➜ <u>Không thể đăng ký</u>`,
+            //             { parse_mode: 'HTML' }
+            //         );
+            //     }
+            // }
 
             const { normalizedDate, drawDate, numbers, groups } = parseSubmissionArgs(args, hasManualDate);
             
