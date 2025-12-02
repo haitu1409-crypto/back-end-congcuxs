@@ -231,6 +231,7 @@ class XSMBScraperController {
     /**
      * Lấy kết quả XSMB với phân trang
      */
+    // ✅ Performance: Add caching headers for getLatest10Results
     async getLatest10Results(req, res) {
         try {
             const page = parseInt(req.query.page) || 1;
@@ -269,6 +270,14 @@ class XSMBScraperController {
                 .lean();
 
             console.log('📋 Fetched results:', results.length);
+
+            // ✅ Performance: Add caching headers to reduce server load
+            // Cache for 2 minutes (120 seconds) - balance between freshness and performance
+            res.set({
+                'Cache-Control': 'public, max-age=120, s-maxage=120, stale-while-revalidate=300',
+                'ETag': `"${Date.now()}-${results.length}"`,
+                'X-Content-Type-Options': 'nosniff'
+            });
 
             res.status(200).json({
                 success: true,

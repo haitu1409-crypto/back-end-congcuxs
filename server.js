@@ -217,7 +217,18 @@ app.use((req, res, next) => {
 });
 
 // Compression middleware để giảm kích thước response
-app.use(compression());
+// ✅ Performance: Use optimal compression level
+app.use(compression({
+    level: 6, // Balance between compression and CPU usage
+    filter: (req, res) => {
+        // Don't compress if client doesn't support it
+        if (req.headers['x-no-compression']) {
+            return false;
+        }
+        // Use compression for all other requests
+        return compression.filter(req, res);
+    }
+}));
 
 // Keep-alive middleware removed for Pro version
 
