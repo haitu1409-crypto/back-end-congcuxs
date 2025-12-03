@@ -15,12 +15,22 @@ const {
     getLatestSoiCauDate
 } = require('../controllers/positionSoiCauLoto.controller');
 
-// Rate limiter cho position soi cau
+// ✅ GIAI ĐOẠN 1.3: Rate limiter CỰC NGHIÊM NGẶT cho position soi cau (API NẶ̣NG)
 const positionSoiCauLimiter = rateLimit({
-    windowMs: 60 * 1000, // 1 phút
-    max: process.env.NODE_ENV === 'development' ? 1000 : 50, // Tăng limit cho development
-    message: 'Quá nhiều yêu cầu soi cầu vị trí, vui lòng thử lại sau',
+    windowMs: 15 * 60 * 1000, // ✅ Tăng lên 15 phút
+    max: process.env.NODE_ENV === 'development' ? 1000 : 10, // ✅ Giảm xuống CHỈ 10 requests / 15 phút trong production
+    message: {
+        success: false,
+        error: 'Too Many Requests',
+        message: 'API soi cầu lô tô đang quá tải. Vui lòng thử lại sau 15 phút.',
+        retryAfter: 900, // seconds
+        suggestion: 'Kết quả soi cầu được cache tự động. Nếu bạn đã xem rồi, vui lòng refresh trang thay vì gọi API mới.'
+    },
+    standardHeaders: true,
+    legacyHeaders: false,
     keyGenerator: (req) => req.headers['x-user-id'] || req.ip,
+    skipSuccessfulRequests: false, // ✅ Đếm cả request thành công (để bảo vệ server)
+    skipFailedRequests: true, // ✅ Không đếm request lỗi
     skip: (req) => {
         // Skip rate limit cho localhost trong development
         return process.env.NODE_ENV === 'development' &&

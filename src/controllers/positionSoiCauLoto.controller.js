@@ -6,6 +6,29 @@
 const positionAnalyzer = require('../services/positionAnalyzerLoto.service');
 const PositionSoiCauLotoResult = require('../models/positionSoiCauLotoResult.model');
 
+// ✅ GIAI ĐOẠN 1: Request Deduplication Map
+// Tránh tính toán trùng lặp khi nhiều users cùng request
+const pendingRequests = new Map();
+
+// ✅ GIAI ĐOẠN 1: Redis Client (nếu có)
+let redisClient = null;
+try {
+    if (process.env.REDIS_URL) {
+        const redis = require('redis');
+        redisClient = redis.createClient({
+            url: process.env.REDIS_URL,
+            socket: {
+                reconnectStrategy: (retries) => retries > 3 ? false : retries * 100,
+                connectTimeout: 2000
+            }
+        });
+        redisClient.on('error', (err) => console.warn('⚠️ Redis error:', err.message));
+        redisClient.connect().catch(() => console.warn('⚠️ Redis not available, using DB cache only'));
+    }
+} catch (error) {
+    console.warn('⚠️ Redis setup failed, using DB cache only');
+}
+
 // Format date to DD/MM/YYYY
 const formatDate = (date) => {
     const d = new Date(date);
@@ -58,50 +81,115 @@ const getPositionSoiCauLoto = async (req, res) => {
         const parsedDate = parseDate(date);
         const formattedDate = formatDate(parsedDate);
 
+        // ✅ GIAI ĐOẠN 1.1: Check Redis Cache TRƯỚC (nếu có)
+        const redisKey = `soicau:loto:${formattedDate}:${numDays}`;
+        if (redisClient && redisClient.isOpen) {
+            try {
+                const redisCached = await redisClient.get(redisKey);
+                if (redisCached) {
+                    console.log(`⚡ [Redis Cache Hit] ${formattedDate} (${numDays} ngày)`);
+                    return res.status(200).json(JSON.parse(redisCached));
+                }
+            } catch (redisError) {
+                console.warn('⚠️ Redis get error:', redisError.message);
+            }
+        }
+
+        // ✅ Check MongoDB Cache
         const cachedResult = await PositionSoiCauLotoResult.findOne({
             analysisDate: formattedDate,
             analysisDays: numDays
         });
 
         if (cachedResult?.data) {
-            console.log(`♻️ [Lô tô] Trả về dữ liệu cache DB cho ${formattedDate} (${numDays} ngày)`);
+            console.log(`♻️ [DB Cache Hit] ${formattedDate} (${numDays} ngày)`);
+            
+            // ✅ GIAI ĐOẠN 1.1: Lưu vào Redis với TTL 10 phút (nếu có)
+            if (redisClient && redisClient.isOpen) {
+                try {
+                    await redisClient.setEx(redisKey, 600, JSON.stringify(cachedResult.data));
+                    console.log(`💾 [Redis] Đã cache kết quả cho ${formattedDate}`);
+                } catch (redisError) {
+                    console.warn('⚠️ Redis set error:', redisError.message);
+                }
+            }
+            
             return res.status(200).json(cachedResult.data);
+        }
+
+        // ✅ GIAI ĐOẠN 1.2: Request Deduplication
+        const dedupeKey = `${formattedDate}:${numDays}`;
+        
+        if (pendingRequests.has(dedupeKey)) {
+            console.log(`⏳ [Deduplication] Đợi kết quả từ request khác: ${dedupeKey}`);
+            try {
+                const result = await pendingRequests.get(dedupeKey);
+                return res.status(200).json(result);
+            } catch (error) {
+                // Nếu request trước lỗi, tiếp tục tính toán mới
+                console.warn(`⚠️ [Deduplication] Request trước bị lỗi, tính lại`);
+            }
         }
 
         console.log(`🎯 [Lô tô] Bắt đầu soi cầu vị trí cho ngày ${formattedDate}, ${numDays} ngày`);
 
-        // Gọi thuật toán phân tích vị trí cho toàn bộ giải (lô tô)
-        const result = await positionAnalyzer.analyzePositionSoiCau(formattedDate, numDays, {
-            mode: 'loto'
-        });
+        // ✅ Tạo promise để deduplicate
+        const calculationPromise = (async () => {
+            try {
+                // Gọi thuật toán phân tích vị trí cho toàn bộ giải (lô tô)
+                const result = await positionAnalyzer.analyzePositionSoiCau(formattedDate, numDays, {
+                    mode: 'loto'
+                });
 
-        console.log(`✅ [Lô tô] Hoàn thành soi cầu vị trí: ${result.predictions.length} dự đoán`);
+                console.log(`✅ [Lô tô] Hoàn thành soi cầu vị trí: ${result.predictions.length} dự đoán`);
 
-        const cacheData = structuredClone ? structuredClone(result) : JSON.parse(JSON.stringify(result));
-        delete cacheData.detailedAnalysis;
-        delete cacheData.patterns;
-        delete cacheData.consistentPatterns;
+                const cacheData = structuredClone ? structuredClone(result) : JSON.parse(JSON.stringify(result));
+                delete cacheData.detailedAnalysis;
+                delete cacheData.patterns;
+                delete cacheData.consistentPatterns;
 
-        await PositionSoiCauLotoResult.findOneAndUpdate(
-            {
-                analysisDate: formattedDate,
-                analysisDays: numDays
-            },
-            {
-                analysisDate: formattedDate,
-                analysisDateObj: parsedDate,
-                analysisDays: numDays,
-                mode: 'loto',
-                data: cacheData,
-                lastCalculatedAt: new Date()
-            },
-            {
-                upsert: true,
-                new: true,
-                setDefaultsOnInsert: true
+                // Lưu vào MongoDB
+                await PositionSoiCauLotoResult.findOneAndUpdate(
+                    {
+                        analysisDate: formattedDate,
+                        analysisDays: numDays
+                    },
+                    {
+                        analysisDate: formattedDate,
+                        analysisDateObj: parsedDate,
+                        analysisDays: numDays,
+                        mode: 'loto',
+                        data: cacheData,
+                        lastCalculatedAt: new Date()
+                    },
+                    {
+                        upsert: true,
+                        new: true,
+                        setDefaultsOnInsert: true
+                    }
+                );
+
+                // ✅ GIAI ĐOẠN 1.1: Lưu vào Redis (nếu có)
+                if (redisClient && redisClient.isOpen) {
+                    try {
+                        await redisClient.setEx(redisKey, 600, JSON.stringify(result));
+                        console.log(`💾 [Redis] Đã cache kết quả mới cho ${formattedDate}`);
+                    } catch (redisError) {
+                        console.warn('⚠️ Redis set error:', redisError.message);
+                    }
+                }
+
+                return result;
+            } finally {
+                // ✅ GIAI ĐOẠN 1.2: Xóa khỏi pending requests
+                pendingRequests.delete(dedupeKey);
             }
-        );
+        })();
 
+        // Lưu vào pending map
+        pendingRequests.set(dedupeKey, calculationPromise);
+        
+        const result = await calculationPromise;
         res.status(200).json(result);
 
     } catch (error) {
