@@ -38,9 +38,6 @@ class PositionAnalyzer {
      */
     analyzePositions(result) {
         const positions = [];
-        
-        // ✅ GIẢM TẢI: Giới hạn tổng số positions để tránh explosion
-        const MAX_TOTAL_POSITIONS = 150; // Giới hạn tổng (thay vì vô hạn)
 
         // Giải đặc biệt
         if (Array.isArray(result.specialPrize) && result.specialPrize[0]) {
@@ -167,11 +164,6 @@ class PositionAnalyzer {
             result.sevenPrizes.forEach((number, elementIndex) => {
                 if (number) {
                     for (let i = 0; i < number.length; i++) {
-                        // ✅ GIẢM TẢI: Break nếu đã đủ positions
-                        if (positions.length >= MAX_TOTAL_POSITIONS) {
-                            console.log(`⚠️ [GIẢM TẢI] Đã đạt giới hạn ${MAX_TOTAL_POSITIONS} positions, dừng analyze`);
-                            return;
-                        }
                         positions.push({
                             number: number[i],
                             position: `(7-${elementIndex}-${i})`,
@@ -183,11 +175,6 @@ class PositionAnalyzer {
                     }
                 }
             });
-        }
-
-        // ✅ GIẢM TẢI: Log số positions để monitor
-        if (positions.length > 140) {
-            console.log(`⚠️ [NHIỀU POSITIONS] Tìm thấy ${positions.length} positions (gần giới hạn)`);
         }
 
         return positions;
@@ -202,13 +189,10 @@ class PositionAnalyzer {
     findPositionPatterns(results, targetDays, options = {}) {
         const mode = options.mode || 'special';
         const patterns = [];
-        
-        // ✅ GIẢM TẢI: Giới hạn số patterns để tránh explosion
-        const MAX_PATTERNS = 2000; // Giới hạn patterns (tránh OOM)
 
         if (results.length < 2) return patterns; // Cần ít nhất 2 ngày
 
-        console.log(`🔍 Bắt đầu soi cầu vị trí cho ${targetDays} ngày (giới hạn ${MAX_PATTERNS} patterns)`);
+        console.log(`🔍 Bắt đầu soi cầu vị trí cho ${targetDays} ngày`);
 
         const directionModes = mode === 'loto' ? ['ltr', 'rtl'] : ['both'];
 
@@ -241,22 +225,10 @@ class PositionAnalyzer {
 
                         // Tìm tất cả cặp vị trí và đối chiếu theo hướng được chỉ định với tất cả targetNumbers
                         const allValidPairs = [];
-                        
-                        // ✅ GIẢM TẢI: Break early nếu đã đủ patterns
-                        let pairCount = 0;
-                        const MAX_PAIRS_PER_DAY = 300; // Giới hạn pairs mỗi ngày
-                        
                         for (let i = 0; i < previousPositions.length; i++) {
                             for (let j = i + 1; j < previousPositions.length; j++) {
-                                // ✅ GIẢM TẢI: Break nếu đã đủ
-                                if (pairCount >= MAX_PAIRS_PER_DAY) {
-                                    console.log(`⚠️ [GIẢM TẢI] Đã đạt ${MAX_PAIRS_PER_DAY} pairs cho ngày ${previousIndex}, dừng tìm`);
-                                    break;
-                                }
-                                
                                 const pos1 = previousPositions[i];
                                 const pos2 = previousPositions[j];
-                                pairCount++;
 
                                 // Ghép số theo hướng được chỉ định (chỉ 1 hướng)
                                 let combinedNumber;
@@ -307,12 +279,6 @@ class PositionAnalyzer {
 
                             // Tạo pattern cho mỗi nhóm
                             Object.values(groupedPairs).forEach(group => {
-                                // ✅ GIẢM TẢI: Break nếu đã đủ patterns
-                                if (patterns.length >= MAX_PATTERNS) {
-                                    console.log(`⚠️ [GIẢM TẢI] Đã đạt ${MAX_PATTERNS} patterns, dừng tìm`);
-                                    return;
-                                }
-                                
                                 patterns.push({
                                     dayIndex: currentIndex,
                                     previousIndex: previousIndex,
@@ -625,12 +591,12 @@ class PositionAnalyzer {
         // Tìm các vị trí xuất hiện nhất quán (cặp vị trí)
         Object.entries(positionGroups).forEach(([positionKey, pairs]) => {
             if (pairs.length >= 1) {
-                // Với mode 'loto': cho phép tất cả biên độ từ 1-10 (để có thể xét 3-10 lần liên tiếp)
+                // Với mode 'loto': cho phép tất cả biên độ từ 1-7 (để có thể xét 3-7 lần liên tiếp)
                 // Với mode 'special': chỉ lấy biên độ 1 ngày
                 let filteredPairs = pairs;
                 if (mode === 'loto') {
-                    // Cho phép tất cả biên độ từ 1-10
-                    filteredPairs = pairs.filter(p => p.biendDo >= 1 && p.biendDo <= 10);
+                    // Cho phép tất cả biên độ từ 1-7
+                    filteredPairs = pairs.filter(p => p.biendDo >= 1 && p.biendDo <= 7);
                 } else {
                     filteredPairs = pairs.filter(p => p.biendDo === 1);
                 }
@@ -1032,7 +998,7 @@ class PositionAnalyzer {
             const startOfPeriod = new Date(endOfDay);
 
             if (mode === 'loto') {
-                // ✅ GIẢM TẢI: Chỉ lấy 8 ngày (cho 7 lần liên tiếp) thay vì 11 ngày
+                // Lấy đủ 8 ngày (cho 7 lần liên tiếp), nhưng mỗi mức sẽ chỉ sử dụng số ngày tương ứng
                 startOfPeriod.setDate(startOfPeriod.getDate() - 7); // [endOfDay - 7, endOfDay] = 8 ngày
             } else {
                 // Logic cũ cho special: [endOfDay - days, endOfDay] = days + 1 ngày
@@ -1040,8 +1006,8 @@ class PositionAnalyzer {
             }
             startOfPeriod.setHours(0, 0, 0, 0);
 
-            const dataDays = mode === 'loto' ? 8 : (days + 1); // ✅ Giảm từ 11 xuống 8
-            console.log(`📅 Lấy dữ liệu từ ${startOfPeriod.toLocaleDateString()} đến ${endOfDay.toLocaleDateString()} (${dataDays} ngày${mode === 'loto' ? ', cho loto 3-7 lần liên tiếp (giảm tải)' : ''})`);
+            const dataDays = mode === 'loto' ? 8 : (days + 1);
+            console.log(`📅 Lấy dữ liệu từ ${startOfPeriod.toLocaleDateString()} đến ${endOfDay.toLocaleDateString()} (${dataDays} ngày${mode === 'loto' ? ', cho loto 3-7 lần liên tiếp (mỗi mức dùng số ngày tương ứng)' : ''})`);
 
             const results = await XSMB.find({
                 drawDate: { $gte: startOfPeriod, $lte: endOfDay },
@@ -1050,7 +1016,6 @@ class PositionAnalyzer {
             })
                 .select('drawDate specialPrize firstPrize secondPrize threePrizes fourPrizes fivePrizes sixPrizes sevenPrizes')
                 .sort({ drawDate: -1 })
-                .limit(dataDays + 2) // ✅ GIẢM TẢI: Giới hạn số documents query
                 .lean();
 
             if (results.length < 2) {
@@ -1059,10 +1024,12 @@ class PositionAnalyzer {
 
             console.log(`🔍 Phân tích ${results.length} ngày dữ liệu`);
 
-            // ✅ GIẢM TẢI: Tìm pattern với biên độ 1-7 thay vì 1-10
-            const patternSearchDays = mode === 'loto' ? 7 : days; // Giảm từ 10 xuống 7
+            // Tìm pattern vị trí
+            // Với mode 'loto': tìm pattern với biên độ 1-7 (để có thể xét 3-7 lần liên tiếp)
+            // Với mode 'special': dùng logic cũ
+            const patternSearchDays = mode === 'loto' ? 7 : days;
             const patterns = this.findPositionPatterns(results, patternSearchDays, { mode });
-            console.log(`📊 Tìm thấy ${patterns.length} pattern từ các ngày (giảm tải: 3-7 lần)`);
+            console.log(`📊 Tìm thấy ${patterns.length} pattern từ các ngày`);
 
             // Kiểm tra tính nhất quán
             let consistentPatterns = [];
@@ -1070,9 +1037,9 @@ class PositionAnalyzer {
             let predictionsByLifetime = {};
 
             if (mode === 'loto') {
-                // ✅ GIẢM TẢI: Giảm từ 3-10 xuống 3-7 (giảm 37.5% computation)
+                // Xét từng mức riêng biệt với số ngày dữ liệu tương ứng
                 // 3 lần = 4 ngày, 4 lần = 5 ngày, ..., 7 lần = 8 ngày
-                const maxLifetime = 7; // ✅ Giảm từ 10 xuống 7
+                const maxLifetime = 7;
                 const minLifetime = 3;
                 const allLifetimePatterns = {};
                 const allLifetimePredictions = {}; // Lưu predictions theo từng mức
@@ -1090,7 +1057,7 @@ class PositionAnalyzer {
 
                     console.log(`🔍 Tính toán ${lifetime} lần liên tiếp với ${requiredDays} ngày dữ liệu`);
 
-                    // ✅ GIẢM TẢI: Biên độ tối đa = 7 thay vì 10
+                    // Tìm pattern với biên độ tối đa = lifetime (nhưng vẫn cho phép 1-7)
                     const lifetimePatterns = this.findPositionPatterns(lifetimeResults, Math.min(lifetime, 7), { mode });
 
                     // Kiểm tra tính nhất quán với số lần liên tiếp yêu cầu
@@ -1122,7 +1089,7 @@ class PositionAnalyzer {
                 }
 
                 consistentPatterns = Object.values(allLifetimePatterns);
-                console.log(`✅ Tìm thấy ${consistentPatterns.length} pattern nhất quán (xét từ ${maxLifetime} xuống ${minLifetime} lần - GIẢM TẢI)`);
+                console.log(`✅ Tìm thấy ${consistentPatterns.length} pattern nhất quán (xét từ ${maxLifetime} xuống ${minLifetime} lần liên tiếp)`);
 
                 // Nhóm predictions theo lifetime (số lần liên tiếp)
                 // Tránh trùng lặp GIỮA các lifetime: nếu số đã xuất hiện ở lifetime cao hơn, không hiển thị ở lifetime thấp hơn
@@ -1300,7 +1267,7 @@ class PositionAnalyzer {
                         ? Math.round(consistentPatterns[0].successRate * 100)
                         : 0,
                     mode,
-                    dataDays: mode === 'loto' ? 11 : (days + 1) // Số ngày dữ liệu thực tế
+                    dataDays: mode === 'loto' ? 8 : (days + 1) // Số ngày dữ liệu thực tế
                 },
                 detailedAnalysis: {
                     patterns,

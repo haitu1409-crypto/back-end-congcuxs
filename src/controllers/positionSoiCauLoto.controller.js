@@ -73,7 +73,7 @@ const getPositionSoiCauLoto = async (req, res) => {
         numDays = parseInt(days) || 4;
         if (numDays < 2 || numDays > 30) {
             return res.status(400).json({
-                error: 'Số ngày phân tích phải từ 2 đến 7 ngày (giảm từ 30 để tối ưu hiệu suất)'
+                error: 'Số ngày phân tích phải từ 2 đến 30 ngày'
             });
         }
 
@@ -231,7 +231,7 @@ const getPositionSoiCauRangeLoto = async (req, res) => {
         const numDays = parseInt(days);
         if (numDays < 2 || numDays > 30) {
             return res.status(400).json({
-                error: 'Số ngày phân tích phải từ 2 đến 7 ngày (giảm từ 30 để tối ưu hiệu suất)'
+                error: 'Số ngày phân tích phải từ 2 đến 30 ngày'
             });
         }
 
@@ -375,7 +375,6 @@ const getPositionPatternStatsLoto = async (req, res) => {
 /**
  * Wrapper với timeout để tránh memory crash
  */
-// ✅ GIẢM TẢI: Giảm timeout từ 2 phút xuống 90 giây
 const withTimeout = (promise, timeoutMs, errorMessage = 'Operation timeout') => {
     return Promise.race([
         promise,
@@ -391,7 +390,7 @@ const withTimeout = (promise, timeoutMs, errorMessage = 'Operation timeout') => 
  * Thêm timeout và error handling để tránh memory crash
  */
 const checkAndUpdateSoiCau = async (req, res) => {
-    const TIMEOUT_MS = 90000; // ✅ GIẢM TẢI: 90 giây thay vì 2 phút
+    const TIMEOUT_MS = 120000; // 2 phút timeout để tránh memory crash
     const startTime = Date.now();
     
     try {
@@ -399,11 +398,11 @@ const checkAndUpdateSoiCau = async (req, res) => {
         const numDays = parseInt(req.query.days) || 4;
 
         // Validate numDays để tránh quá tải
-        if (numDays > 10) {
+        if (numDays > 7) {
             return res.status(400).json({
                 success: false,
-                error: 'Số ngày phân tích không được vượt quá 10 để tránh quá tải bộ nhớ',
-                message: 'Vui lòng chọn số ngày nhỏ hơn hoặc bằng 10'
+                error: 'Số ngày phân tích không được vượt quá 7 để tránh quá tải bộ nhớ',
+                message: 'Vui lòng chọn số ngày nhỏ hơn hoặc bằng 7'
             });
         }
 

@@ -97,7 +97,7 @@ const checkUpdateLimiter = rateLimit({
 /**
  * @route POST /api/position-soicau-loto/check-update
  * @desc Kiểm tra và cập nhật soi cầu tự động
- * @query {number} days - Số ngày phân tích (2-10, default: 4) - Giới hạn 10 để tránh memory crash
+ * @query {number} days - Số ngày phân tích (2-7, default: 4) - Giới hạn 7 để tránh memory crash
  * @access Public
  */
 router.post('/check-update', checkUpdateLimiter, async (req, res) => {
