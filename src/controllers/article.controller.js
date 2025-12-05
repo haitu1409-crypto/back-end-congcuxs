@@ -197,8 +197,11 @@ const getFeaturedArticles = async (req, res) => {
             });
         }
 
-        // Build query - get latest articles from selected category or all categories
-        let query = { status: 'published' };
+        // Build query - get featured articles (isFeatured = true) from selected category or all categories
+        let query = { 
+            status: 'published',
+            isFeatured: true // Chỉ lấy bài viết có checkbox "Bài viết nổi bật"
+        };
         if (category) {
             query.category = category;
         }
@@ -737,7 +740,7 @@ const createArticle = async (req, res) => {
 };
 
 /**
- * Get categories
+ * Get categories - Đồng bộ với front-end, group category cũ thành category mới
  */
 const getCategories = async (req, res) => {
     try {
@@ -752,21 +755,55 @@ const getCategories = async (req, res) => {
             });
         }
 
-        const categories = Article.getCategoryLabels();
+        // Lấy thống kê category từ database (category cũ)
         const categoryStats = await Article.aggregate([
             { $match: { status: 'published' } },
             { $group: { _id: '$category', count: { $sum: 1 } } },
             { $sort: { count: -1 } }
         ]);
 
-        const result = Object.entries(categories).map(([key, label]) => {
-            const stats = categoryStats.find(stat => stat._id === key);
-            return {
-                key,
-                label,
-                count: stats ? stats.count : 0
-            };
+        // Group category cũ thành category mới (đồng bộ với front-end)
+        const groupedCategories = {};
+        
+        categoryStats.forEach(stat => {
+            const oldCategory = stat._id;
+            const newCategory = Article.mapOldCategoryToNew(oldCategory);
+            
+            if (groupedCategories[newCategory]) {
+                groupedCategories[newCategory].count += stat.count;
+            } else {
+                groupedCategories[newCategory] = {
+                    key: newCategory,
+                    label: Article.getCategoryLabel(newCategory),
+                    count: stat.count
+                };
+            }
         });
+
+        // Trả về theo thứ tự mong muốn (đồng bộ với front-end)
+        const order = ['lien-minh-huyen-thoai', 'lien-quan-mobile', 'dau-truong-chan-ly-tft', 'trending'];
+        const result = order
+            .map(key => groupedCategories[key])
+            .filter(cat => cat) // Loại bỏ undefined
+            .map(cat => ({
+                key: cat.key,
+                count: cat.count
+            }));
+
+        // Nếu không có category nào, trả về category mới với count = 0
+        if (result.length === 0) {
+            const newCategoryLabels = {
+                'lien-minh-huyen-thoai': 'Liên Minh Huyền Thoại',
+                'lien-quan-mobile': 'Liên Quân Mobile',
+                'dau-truong-chan-ly-tft': 'Đấu Trường Chân Lý TFT',
+                'trending': 'Trending'
+            };
+            
+            result.push(...order.map(key => ({
+                key: key,
+                count: 0
+            })));
+        }
 
         cache.set(cacheKey, result);
 

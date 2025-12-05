@@ -684,6 +684,7 @@ module.exports = {
     getLabelPriority,
     getLabelPoints,
     getPointsByCount,
-    getPointsByLabelOrCount
+    getPointsByLabelOrCount,
+    getChamPointsByDigitCount
 };
 

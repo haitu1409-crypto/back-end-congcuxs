@@ -249,6 +249,25 @@ function countTwoDigitNumbers(text) {
 }
 
 /**
+ * Kiểm tra user có phải admin không
+ * @param {string|number} userId - User ID cần kiểm tra
+ * @returns {boolean} - true nếu là admin, false nếu không
+ */
+function isAdmin(userId) {
+    if (!userId) return false;
+    const adminIds = process.env.TELEGRAM_ADMIN_ID;
+    if (!adminIds) return false;
+    
+    // Parse danh sách admin IDs (có thể là "8551427685, 6570193875" hoặc "8551427685,6570193875")
+    const adminIdList = adminIds
+        .split(',')
+        .map(id => id.trim())
+        .filter(Boolean);
+    
+    return adminIdList.includes(String(userId));
+}
+
+/**
  * Kiểm tra và xóa tin nhắn chứa nhiều cặp số 2 chữ số (từ 15 cặp trở lên)
  * @param {object} ctx - Telegram context
  * @returns {Promise<boolean>} - true nếu đã xóa tin nhắn, false nếu không
@@ -272,6 +291,12 @@ async function checkAndDeleteNumberSpamMessage(ctx) {
 
     // Đếm số lượng cặp số 2 chữ số
     const numberCount = countTwoDigitNumbers(messageText);
+
+    // Bỏ qua nếu là admin và số lượng <= 20 (cho phép admin gửi tin nhắn số như tin nhắn thông thường)
+    const userId = ctx.from?.id;
+    if (userId && isAdmin(userId) && numberCount > 0 && numberCount <= 20) {
+        return false;
+    }
 
     // Nếu có từ 15 cặp số trở lên, xóa tin nhắn và thông báo
     if (numberCount >= 15) {

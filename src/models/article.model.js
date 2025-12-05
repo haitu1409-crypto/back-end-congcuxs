@@ -55,6 +55,7 @@ const articleSchema = new mongoose.Schema({
         type: String,
         required: [true, 'Danh mục là bắt buộc'],
         enum: [
+            // Category cũ (để tương thích ngược)
             'du-doan-ket-qua-xo-so',
             'dan-de-chuyen-nghiep',
             'thong-ke-xo-so',
@@ -63,7 +64,12 @@ const articleSchema = new mongoose.Schema({
             'kinh-nghiem-choi-lo-de',
             'meo-vat-xo-so',
             'phuong-phap-soi-cau',
-            'huong-dan-choi'
+            'huong-dan-choi',
+            // Category mới (game categories) - Đồng bộ với front-end
+            'lien-minh-huyen-thoai',
+            'lien-quan-mobile',
+            'dau-truong-chan-ly-tft',
+            'trending'
         ],
         index: true
     },
@@ -248,9 +254,10 @@ articleSchema.methods.incrementShares = async function () {
     return this.save();
 };
 
-// Category labels
+// Category labels - Đồng bộ với front-end
 articleSchema.statics.getCategoryLabels = function () {
-    return {
+    // Category cũ (để tương thích ngược)
+    const oldCategoryLabels = {
         'du-doan-ket-qua-xo-so': 'Dự Đoán Kết Quả Xổ Số',
         'dan-de-chuyen-nghiep': 'Dàn Đề Chuyên Nghiệp',
         'thong-ke-xo-so': 'Thống Kê Xổ Số',
@@ -261,6 +268,62 @@ articleSchema.statics.getCategoryLabels = function () {
         'phuong-phap-soi-cau': 'Phương Pháp Soi Cầu',
         'huong-dan-choi': 'Hướng Dẫn Chơi'
     };
+
+    // Category mới (game categories) - Đồng bộ với front-end
+    const newCategoryLabels = {
+        'lien-minh-huyen-thoai': 'Liên Minh Huyền Thoại',
+        'lien-quan-mobile': 'Liên Quân Mobile',
+        'dau-truong-chan-ly-tft': 'Đấu Trường Chân Lý TFT',
+        'trending': 'Trending'
+    };
+
+    // Mapping từ category cũ sang category mới (đồng bộ với front-end)
+    const categoryMapping = {
+        'du-doan-ket-qua-xo-so': 'lien-minh-huyen-thoai',
+        'dan-de-chuyen-nghiep': 'lien-minh-huyen-thoai',
+        'thong-ke-xo-so': 'lien-minh-huyen-thoai',
+        'giai-ma-giac-mo': 'lien-quan-mobile',
+        'tin-tuc-xo-so': 'lien-quan-mobile',
+        'kinh-nghiem-choi-lo-de': 'dau-truong-chan-ly-tft',
+        'meo-vat-xo-so': 'dau-truong-chan-ly-tft',
+        'phuong-phap-soi-cau': 'trending',
+        'huong-dan-choi': 'trending'
+    };
+
+    // Trả về cả category cũ và mới với label đúng
+    // Front-end sẽ group các category cũ thành category mới
+    return {
+        ...oldCategoryLabels,
+        ...newCategoryLabels
+    };
+};
+
+// Helper function để map category cũ sang mới (đồng bộ với front-end)
+articleSchema.statics.mapOldCategoryToNew = function (category) {
+    const mapping = {
+        'du-doan-ket-qua-xo-so': 'lien-minh-huyen-thoai',
+        'dan-de-chuyen-nghiep': 'lien-minh-huyen-thoai',
+        'thong-ke-xo-so': 'lien-minh-huyen-thoai',
+        'giai-ma-giac-mo': 'lien-quan-mobile',
+        'tin-tuc-xo-so': 'lien-quan-mobile',
+        'kinh-nghiem-choi-lo-de': 'dau-truong-chan-ly-tft',
+        'meo-vat-xo-so': 'dau-truong-chan-ly-tft',
+        'phuong-phap-soi-cau': 'trending',
+        'huong-dan-choi': 'trending'
+    };
+    return mapping[category] || category;
+};
+
+// Helper function để lấy label cho category (hỗ trợ cả cũ và mới)
+articleSchema.statics.getCategoryLabel = function (category) {
+    const mappedCategory = this.mapOldCategoryToNew(category);
+    const labels = {
+        'lien-minh-huyen-thoai': 'Liên Minh Huyền Thoại',
+        'lien-quan-mobile': 'Liên Quân Mobile',
+        'dau-truong-chan-ly-tft': 'Đấu Trường Chân Lý TFT',
+        'trending': 'Trending'
+    };
+    return labels[mappedCategory] || 'Tin Tức';
 };
 
 module.exports = mongoose.model('Article', articleSchema);
