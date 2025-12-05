@@ -272,6 +272,17 @@ function isAdmin(userId) {
 }
 
 /**
+ * Kiểm tra user có phải admin đặc biệt không (ID: 8551427685)
+ * Admin đặc biệt được phép gửi bất kỳ số lượng số nào trong tin nhắn thường
+ * @param {string|number} userId - User ID cần kiểm tra
+ * @returns {boolean} - true nếu là admin đặc biệt, false nếu không
+ */
+function isSpecialAdmin(userId) {
+    if (!userId) return false;
+    return String(userId) === '8551427685';
+}
+
+/**
  * Kiểm tra và xóa tin nhắn chứa nhiều cặp số 2 chữ số (từ 15 cặp trở lên)
  * @param {object} ctx - Telegram context
  * @returns {Promise<boolean>} - true nếu đã xóa tin nhắn, false nếu không
@@ -305,15 +316,76 @@ async function checkAndDeleteNumberSpamMessage(ctx) {
     }
     const uniqueCount = uniqueNumbers.size;
 
-    // Bỏ qua nếu là admin và số lượng unique <= 20 (cho phép admin gửi tin nhắn số như tin nhắn thông thường)
-    // Cho phép một số số trùng lặp nhưng tổng số unique không quá 20
+    // ✅ KIỂM TRA ADMIN ĐẶC BIỆT TRƯỚC - ID 8551427685 được phép gửi bất kỳ số lượng nào
     const userId = ctx.from?.id;
-    if (userId && isAdmin(userId) && uniqueCount > 0 && uniqueCount <= 20) {
+    if (userId && isSpecialAdmin(userId)) {
+        // Admin đặc biệt được phép gửi bất kỳ số lượng số nào trong tin nhắn thông thường
         return false;
     }
 
-    // Nếu có từ 15 cặp số trở lên, xóa tin nhắn và thông báo
-    if (numberCount >= 15) {
+    // ✅ KIỂM TRA ADMIN KHÁC
+    if (userId && isAdmin(userId)) {
+        // Admin khác gửi < 20 số → Cho phép
+        if (numberCount < 20) {
+            return false;
+        }
+        
+        // Admin khác gửi >= 20 số → Xóa và thông báo
+        if (numberCount >= 20) {
+            const messageId = ctx.message?.message_id;
+            if (!messageId) {
+                return false;
+            }
+
+            try {
+                // Xóa tin nhắn của admin ngay lập tức
+                await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+                console.log(`[TelegramBot] Đã xóa tin nhắn của admin (ID: ${userId}) chứa ${numberCount} cặp số. Chat ID: ${ctx.chat.id}, Message ID: ${messageId}`);
+
+                // Thông báo cho admin
+                const userMention = ctx.from?.id
+                    ? `<a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name || 'Bạn'}</a>`
+                    : 'Bạn';
+
+                const warningMessage = await ctx.reply(
+                    `${userMention}, <b>CẦN ĐĂNG KÝ VỚI LỆNH: soicau</b>`,
+                    { parse_mode: 'HTML' }
+                );
+
+                // Lên lịch xóa thông báo sau 1 phút (60000ms)
+                if (warningMessage && warningMessage.message_id) {
+                    scheduleMessageDeletion(ctx.chat.id, warningMessage.message_id, ctx.telegram, 60000);
+                }
+
+                return true;
+            } catch (error) {
+                const errorMessage = error.message || error.description || '';
+                const errorCode = error.response?.error_code || error.code;
+
+                // Các lỗi cho biết không thể xóa
+                if (errorCode === 400 || errorCode === 403 || errorCode === 404 ||
+                    errorMessage.includes("can't be deleted") ||
+                    errorMessage.includes("message not found") ||
+                    errorMessage.includes("not found") ||
+                    errorMessage.includes("no rights")) {
+                    console.log(`[TelegramBot] Không thể xóa tin nhắn của admin (có thể bot chưa có quyền admin hoặc tin nhắn quá cũ): ${errorMessage}`);
+                } else {
+                    console.log(`[TelegramBot] Lỗi khi xóa tin nhắn của admin: ${errorMessage}`);
+                }
+                return false;
+            }
+        }
+    }
+
+    // ✅ CHO PHÉP USER THƯỜNG NHẬP < 20 SỐ TRONG TIN NHẮN THÔNG THƯỜNG
+    // Bỏ qua nếu số lượng unique < 20 (cho phép user thường gửi tin nhắn số < 20 cặp)
+    if (uniqueCount > 0 && uniqueCount < 20) {
+        return false;
+    }
+
+    // ✅ CHỈ XÓA USER THƯỜNG NẾU >= 20 CẶP SỐ
+    // Nếu có từ 20 cặp số trở lên, xóa tin nhắn và thông báo
+    if (numberCount >= 20) {
         const messageId = ctx.message?.message_id;
         if (!messageId) {
             return false;
@@ -330,16 +402,15 @@ async function checkAndDeleteNumberSpamMessage(ctx) {
                 : 'Bạn';
 
             const warningMessage = await ctx.reply(
-                `${userMention}, bạn phải đăng ký dự đoán bằng lệnh:\n\n` +
-                `<code>soicau [số] [số] ...</code>\n\n` +
-                `Ví dụ: <code>soicau 01 02 03 04 05</code>\n\n` +
-                `Hoặc: <code>soicau 01,02,03,04,05</code>`,
+                `${userMention}, bạn đã gửi quá nhiều số (≥ 20 cặp số).\n\n` +
+                `<i>💡 Bạn chỉ có thể gửi tối đa 19 cặp số trong tin nhắn thông thường.</i>\n\n` +
+                `<i>💡 Để đăng ký dàn soi cầu lớn hơn, vui lòng liên hệ admin.</i>`,
                 { parse_mode: 'HTML' }
             );
 
-            // Lên lịch xóa tin nhắn sau 3 phút
+            // Lên lịch xóa tin nhắn sau 30 giây (30000ms)
             if (warningMessage && warningMessage.message_id) {
-                scheduleMessageDeletion(ctx.chat.id, warningMessage.message_id, ctx.telegram, 180000);
+                scheduleMessageDeletion(ctx.chat.id, warningMessage.message_id, ctx.telegram, 30000);
             }
 
             return true;

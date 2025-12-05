@@ -1381,35 +1381,35 @@ function createPredictionHandlers({ xsmbModel }) {
 
             const { normalizedDate, drawDate, numbers, groups } = parseSubmissionArgs(args, hasManualDate);
             
-            // Kiểm tra nếu có 20 cặp số trở lên, chỉ admin mới được đăng
-            if (numbers && numbers.length >= 20) {
-                if (!isAdmin(userId)) {
-                    // Xóa tin nhắn đăng ký soi cầu của người dùng
-                    try {
-                        if (ctx.message && ctx.message.message_id && chatId) {
-                            await ctx.telegram.deleteMessage(chatId, ctx.message.message_id);
-                        }
-                    } catch (deleteError) {
-                        console.log('[Prediction] Không thể xóa tin nhắn đăng ký:', deleteError.message);
+            // ✅ CHẶN USER THƯỜNG DÙNG LỆNH SOICAU (BẤT KỲ SỐ LƯỢNG NÀO)
+            // Chỉ admin mới được dùng lệnh soicau
+            if (!isAdmin(userId)) {
+                // Xóa tin nhắn đăng ký soi cầu của người dùng
+                try {
+                    if (ctx.message && ctx.message.message_id && chatId) {
+                        await ctx.telegram.deleteMessage(chatId, ctx.message.message_id);
                     }
-                    
-                    // Sử dụng replyAndCleanOldPrediction để xóa thông báo cũ cùng loại và tự động xóa sau 1 phút
-                    const sentMessage = await replyAndCleanOldPrediction(
-                        ctx,
-                        'soicau_khong_quyen',
-                        `<b>❌ KHÔNG CÓ QUYỀN</b>\n\n` +
-                        `<i>Chỉ có người dùng cấp quyền mới được đăng dàn soi cầu.</i>`,
-                        { parse_mode: 'HTML' },
-                        false // Không dùng autoDeleteAfter5Min
-                    );
-                    
-                    // Schedule xóa sau 1 phút
-                    if (sentMessage && sentMessage.message_id && chatId) {
-                        scheduleMessageDeletion1Min(chatId, sentMessage.message_id, ctx.telegram, 'soicau_khong_quyen');
-                    }
-                    
-                    return sentMessage;
+                } catch (deleteError) {
+                    console.log('[Prediction] Không thể xóa tin nhắn đăng ký:', deleteError.message);
                 }
+                
+                // Sử dụng replyAndCleanOldPrediction để xóa thông báo cũ cùng loại và tự động xóa sau 1 phút
+                const sentMessage = await replyAndCleanOldPrediction(
+                    ctx,
+                    'soicau_khong_quyen',
+                    `<b>❌ KHÔNG CÓ QUYỀN</b>\n\n` +
+                    `<i>Chỉ có người dùng cấp quyền mới được sử dụng lệnh soicau.</i>\n\n` +
+                    `<i>💡 Bạn có thể gửi dãy số (< 20 cặp số) bằng tin nhắn thông thường.</i>`,
+                    { parse_mode: 'HTML' },
+                    false // Không dùng autoDeleteAfter5Min
+                );
+                
+                // Schedule xóa sau 1 phút
+                if (sentMessage && sentMessage.message_id && chatId) {
+                    scheduleMessageDeletion1Min(chatId, sentMessage.message_id, ctx.telegram, 'soicau_khong_quyen');
+                }
+                
+                return sentMessage;
             }
             
             const { username, displayName } = getUserIdentifiers(ctx);
