@@ -291,10 +291,20 @@ async function checkAndDeleteNumberSpamMessage(ctx) {
 
     // Đếm số lượng cặp số 2 chữ số
     const numberCount = countTwoDigitNumbers(messageText);
+    
+    // Đếm số unique để kiểm tra cho admin (cho phép một số số trùng lặp)
+    const uniqueNumbers = new Set();
+    const twoDigitPattern = /\b\d{2}\b/g;
+    let match;
+    while ((match = twoDigitPattern.exec(messageText)) !== null) {
+        uniqueNumbers.add(match[0]);
+    }
+    const uniqueCount = uniqueNumbers.size;
 
-    // Bỏ qua nếu là admin và số lượng <= 20 (cho phép admin gửi tin nhắn số như tin nhắn thông thường)
+    // Bỏ qua nếu là admin và số lượng unique <= 20 (cho phép admin gửi tin nhắn số như tin nhắn thông thường)
+    // Cho phép một số số trùng lặp nhưng tổng số unique không quá 20
     const userId = ctx.from?.id;
-    if (userId && isAdmin(userId) && numberCount > 0 && numberCount <= 20) {
+    if (userId && isAdmin(userId) && uniqueCount > 0 && uniqueCount <= 20) {
         return false;
     }
 
