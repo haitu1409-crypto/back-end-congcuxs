@@ -12,6 +12,24 @@ class LotterySocketService {
         this.lotteryNamespace = null;
         this.connectedClients = new Set();
         this.latestSnapshot = this.createEmptyResult();
+        
+        // 🚀 OPTIMIZATION: Cache latest result để giảm DB queries
+        this.latestResultCache = null;
+        this.cacheExpiry = null;
+        this.CACHE_TTL_MS = 5000; // Cache 5 giây
+        
+        // 🚀 OPTIMIZATION: Rate limiting per IP
+        this.connectionRateLimiter = new Map(); // IP -> timestamp[]
+        this.MAX_CONNECTIONS_PER_IP = 5; // Max 5 connections per IP trong 1 phút
+        this.CONNECTION_WINDOW_MS = 60000; // 1 minute window
+        
+        // 🚀 OPTIMIZATION: Batch latest requests
+        this.pendingLatestRequests = new Set();
+        this.latestRequestBatchTimeout = null;
+        this.BATCH_DELAY_MS = 100; // Batch requests trong 100ms
+        
+        // 🚀 OPTIMIZATION: Connection monitoring
+        this.startConnectionMonitor();
     }
 
     /**
@@ -41,6 +59,30 @@ class LotterySocketService {
         if (!this.lotteryNamespace) return;
 
         this.lotteryNamespace.on('connection', (socket) => {
+            // 🚀 OPTIMIZATION: Rate limiting per IP
+            const clientIP = socket.handshake.address || socket.request.connection.remoteAddress || 'unknown';
+            const now = Date.now();
+            
+            if (!this.connectionRateLimiter.has(clientIP)) {
+                this.connectionRateLimiter.set(clientIP, []);
+            }
+            
+            const connections = this.connectionRateLimiter.get(clientIP);
+            // Remove old connections outside window
+            const recentConnections = connections.filter(
+                ts => now - ts < this.CONNECTION_WINDOW_MS
+            );
+            
+            if (recentConnections.length >= this.MAX_CONNECTIONS_PER_IP) {
+                console.warn(`⚠️ Rate limit: IP ${clientIP} có quá nhiều connections (${recentConnections.length}), disconnect`);
+                socket.emit('lottery:error', { message: 'Quá nhiều kết nối từ IP này' });
+                socket.disconnect();
+                return;
+            }
+            
+            recentConnections.push(now);
+            this.connectionRateLimiter.set(clientIP, recentConnections);
+            
             this.connectedClients.add(socket.id);
             const station = 'xsmb';
             const roomName = `lottery:${station}`;
@@ -48,7 +90,7 @@ class LotterySocketService {
             socket.join(roomName);
             console.log(`✅ Client ${socket.id} đã kết nối đến /lottery namespace, tham gia room: ${roomName}`);
 
-            // Gửi dữ liệu mới nhất khi client kết nối
+            // 🚀 OPTIMIZATION: Batch latest requests thay vì gửi ngay
             this.sendLatestResult(socket);
 
             // Ping/Pong để kiểm tra kết nối
@@ -64,6 +106,8 @@ class LotterySocketService {
             // Xử lý disconnect
             socket.on('disconnect', (reason) => {
                 this.connectedClients.delete(socket.id);
+                // Remove from pending requests
+                this.pendingLatestRequests.delete(socket);
                 console.log(`❌ Client ${socket.id} đã ngắt kết nối khỏi /lottery: ${reason}`);
             });
         });
@@ -71,34 +115,85 @@ class LotterySocketService {
 
     /**
      * Gửi kết quả mới nhất cho client
+     * 🚀 OPTIMIZATION: Batch requests và cache để giảm DB queries
      */
     async sendLatestResult(socket) {
-        try {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
-
-            let payload = null;
-
-            const result = await XSMB.findOne({
-                drawDate: { $gte: today },
-                station: 'xsmb'
-            }).sort({ createdAt: -1 }).lean();
-
-            if (result) {
-                payload = this.formatResultForClient(result);
-                this.latestSnapshot = payload;
-            } else if (this.latestSnapshot) {
-                payload = this.latestSnapshot;
-            } else {
-                payload = this.createEmptyResult();
-                this.latestSnapshot = payload;
-            }
-
-            socket.emit('lottery:latest', payload);
-        } catch (error) {
-            console.error('❌ Lỗi khi gửi latest result:', error);
-            socket.emit('lottery:error', { message: 'Không thể lấy dữ liệu mới nhất' });
+        // Add to pending batch
+        this.pendingLatestRequests.add(socket);
+        
+        // Clear existing timeout
+        if (this.latestRequestBatchTimeout) {
+            clearTimeout(this.latestRequestBatchTimeout);
         }
+        
+        // Set new timeout để batch process
+        this.latestRequestBatchTimeout = setTimeout(async () => {
+            await this.processBatchLatestRequests();
+        }, this.BATCH_DELAY_MS);
+    }
+    
+    /**
+     * Process batch latest requests - chỉ query DB 1 lần cho nhiều requests
+     */
+    async processBatchLatestRequests() {
+        if (this.pendingLatestRequests.size === 0) return;
+        
+        const sockets = Array.from(this.pendingLatestRequests);
+        this.pendingLatestRequests.clear();
+        
+        // Filter out disconnected sockets
+        const activeSockets = sockets.filter(socket => socket.connected);
+        
+        if (activeSockets.length === 0) return;
+        
+        let payload;
+        try {
+            const now = Date.now();
+            
+            // 🚀 OPTIMIZATION: Use cache nếu còn valid
+            if (this.latestResultCache && 
+                this.cacheExpiry && 
+                now < this.cacheExpiry) {
+                payload = this.latestResultCache;
+                console.log(`📦 Using cached latest result for ${activeSockets.length} clients`);
+            } else {
+                // Query DB chỉ khi cache expired
+                const today = new Date();
+                today.setHours(0, 0, 0, 0);
+
+                const result = await XSMB.findOne({
+                    drawDate: { $gte: today },
+                    station: 'xsmb'
+                }).sort({ createdAt: -1 }).lean();
+
+                if (result) {
+                    payload = this.formatResultForClient(result);
+                    this.latestSnapshot = payload;
+                } else if (this.latestSnapshot) {
+                    payload = this.latestSnapshot;
+                } else {
+                    payload = this.createEmptyResult();
+                    this.latestSnapshot = payload;
+                }
+                
+                // Cache result
+                this.latestResultCache = payload;
+                this.cacheExpiry = now + this.CACHE_TTL_MS;
+                console.log(`💾 Cached latest result, will expire in ${this.CACHE_TTL_MS}ms`);
+            }
+        } catch (error) {
+            console.error('❌ Lỗi khi batch process latest requests:', error);
+            payload = this.latestSnapshot || this.createEmptyResult();
+        }
+        
+        // Send to all pending sockets
+        activeSockets.forEach(socket => {
+            if (socket.connected) {
+                socket.emit('lottery:latest', payload);
+            }
+        });
+        
+        console.log(`📤 Sent latest result to ${activeSockets.length} clients (batch)`);
     }
 
     /**
@@ -132,6 +227,9 @@ class LotterySocketService {
 
         if (fullResult) {
             this.latestSnapshot = this.formatResultForClient(fullResult);
+            // 🚀 OPTIMIZATION: Invalidate cache khi có update mới
+            this.latestResultCache = null;
+            this.cacheExpiry = null;
         }
     }
 
@@ -148,6 +246,10 @@ class LotterySocketService {
         const roomName = `lottery:${station}`;
         const formatted = this.formatResultForClient(result);
         this.latestSnapshot = formatted;
+        
+        // 🚀 OPTIMIZATION: Update cache với result mới nhất
+        this.latestResultCache = formatted;
+        this.cacheExpiry = Date.now() + this.CACHE_TTL_MS;
 
         this.lotteryNamespace.to(roomName).emit('lottery:complete', formatted);
         this.lotteryNamespace.to(roomName).emit('lottery:full-update', formatted);
@@ -336,6 +438,46 @@ class LotterySocketService {
      */
     getConnectedClientsCount() {
         return this.connectedClients.size;
+    }
+    
+    /**
+     * 🚀 OPTIMIZATION: Connection monitoring để theo dõi memory và connections
+     */
+    startConnectionMonitor() {
+        // Monitor connections mỗi 30 giây
+        setInterval(() => {
+            const connectedCount = this.connectedClients.size;
+            const memoryUsage = process.memoryUsage();
+            const memoryMB = Math.round(memoryUsage.heapUsed / 1024 / 1024);
+            const memoryLimitMB = Math.round(memoryUsage.heapTotal / 1024 / 1024);
+            
+            console.log(`📊 Lottery Socket Stats:`, {
+                connectedClients: connectedCount,
+                memoryMB: `${memoryMB}MB / ${memoryLimitMB}MB`,
+                cacheValid: this.cacheExpiry && Date.now() < this.cacheExpiry,
+                pendingRequests: this.pendingLatestRequests.size
+            });
+            
+            // Warning nếu memory > 400MB (80% of 512MB)
+            if (memoryUsage.heapUsed > 400 * 1024 * 1024) {
+                console.warn('⚠️ Memory usage cao:', {
+                    used: `${memoryMB}MB`,
+                    total: `${memoryLimitMB}MB`,
+                    connectedClients: connectedCount
+                });
+            }
+            
+            // Cleanup old rate limiter entries (mỗi 5 phút)
+            const now = Date.now();
+            for (const [ip, timestamps] of this.connectionRateLimiter.entries()) {
+                const recent = timestamps.filter(ts => now - ts < this.CONNECTION_WINDOW_MS);
+                if (recent.length === 0) {
+                    this.connectionRateLimiter.delete(ip);
+                } else {
+                    this.connectionRateLimiter.set(ip, recent);
+                }
+            }
+        }, 30000); // Every 30 seconds
     }
 }
 
