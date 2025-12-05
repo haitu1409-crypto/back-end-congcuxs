@@ -5,6 +5,8 @@
 const express = require('express');
 const {
     getGroupchatRoom,
+    getGroupchatRoomPublic,
+    getGroupchatMessagesPublic,
     getPrivateChatWithAdmin,
     getMessages,
     getMyChatRooms,
@@ -26,6 +28,10 @@ const {
 const { verifyToken } = require('../middleware/auth.middleware');
 
 const router = express.Router();
+
+// Public routes (no auth required) - for viewing chat messages without login
+router.get('/groupchat/public', getGroupchatRoomPublic);
+router.get('/groupchat/messages/public', getGroupchatMessagesPublic);
 
 // Import mark as read limiter from server.js (passed via app.locals or require)
 let markAsReadLimiter;
@@ -52,7 +58,7 @@ try {
     markAsReadLimiter = (req, res, next) => next();
 }
 
-// All routes require authentication
+// Protected routes require authentication (routes above are public)
 router.use(verifyToken);
 
 // Chat access verification

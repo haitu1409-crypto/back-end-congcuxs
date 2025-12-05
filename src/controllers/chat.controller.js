@@ -551,6 +551,82 @@ exports.getMessages = async (req, res) => {
     }
 };
 
+// Get groupchat room public (no auth required)
+exports.getGroupchatRoomPublic = async (req, res) => {
+    try {
+        const room = await ChatRoom.getGroupchatRoom();
+        
+        if (!room || !room.roomId) {
+            return res.status(500).json({
+                success: false,
+                message: 'Không thể tạo hoặc lấy phòng chat'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: {
+                room: {
+                    roomId: room.roomId,
+                    type: room.type,
+                    name: room.name || 'Group Chat',
+                    description: room.description || 'Phòng chat chung cho tất cả thành viên',
+                    maxUsers: room.maxUsers || 100,
+                    currentUsers: room.participants ? room.participants.length : 0
+                }
+            }
+        });
+    } catch (error) {
+        console.error('Get groupchat room public error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi server khi lấy phòng chat',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
+// Get groupchat messages public (no auth required, read-only)
+exports.getGroupchatMessagesPublic = async (req, res) => {
+    try {
+        const { limit = 50, beforeDate } = req.query;
+
+        // Get groupchat room
+        const room = await ChatRoom.getGroupchatRoom();
+        if (!room || !room.roomId) {
+            return res.status(500).json({
+                success: false,
+                message: 'Không thể tạo hoặc lấy phòng chat'
+            });
+        }
+
+        // Get messages (public read-only access)
+        const messages = await Message.getMessagesByRoom(room.roomId, {
+            limit: parseInt(limit),
+            beforeDate: beforeDate ? new Date(beforeDate) : null
+        });
+
+        // Reverse để hiển thị từ cũ → mới
+        messages.reverse();
+
+        res.json({
+            success: true,
+            data: {
+                messages,
+                hasMore: messages.length === parseInt(limit),
+                roomId: room.roomId
+            }
+        });
+    } catch (error) {
+        console.error('Get groupchat messages public error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi server',
+            error: process.env.NODE_ENV === 'development' ? error.message : undefined
+        });
+    }
+};
+
 // Get user's chat rooms (for admin)
 exports.getMyChatRooms = async (req, res) => {
     try {
