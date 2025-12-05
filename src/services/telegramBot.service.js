@@ -493,9 +493,9 @@ async function checkAndDeleteLinkMessage(ctx) {
             { parse_mode: 'HTML' }
         );
 
-        // Lên lịch xóa tin nhắn cảnh báo sau 3 phút
+        // Lên lịch xóa tin nhắn cảnh báo sau 30 giây
         if (warningMessage && warningMessage.message_id) {
-            scheduleMessageDeletion(ctx.chat.id, warningMessage.message_id, ctx.telegram, 180000);
+            scheduleMessageDeletion(ctx.chat.id, warningMessage.message_id, ctx.telegram, 30000);
         }
 
         return true;
