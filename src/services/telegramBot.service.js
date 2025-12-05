@@ -361,6 +361,147 @@ async function checkAndDeleteNumberSpamMessage(ctx) {
 }
 
 /**
+ * Kiểm tra xem tin nhắn có chứa link không
+ * @param {string} text - Nội dung tin nhắn
+ * @returns {boolean} - true nếu có link, false nếu không
+ */
+function containsLink(text) {
+    if (!text || typeof text !== 'string') {
+        return false;
+    }
+
+    // Pattern để phát hiện các loại link phổ biến
+    const linkPatterns = [
+        /https?:\/\/[^\s]+/gi,                    // http:// hoặc https://
+        /www\.[^\s]+/gi,                          // www.example.com
+        /[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*/gi,    // example.com, example.co.uk
+        /t\.me\/[^\s]+/gi,                        // t.me/...
+        /telegram\.me\/[^\s]+/gi,                 // telegram.me/...
+        /bit\.ly\/[^\s]+/gi,                      // bit.ly/...
+        /tinyurl\.com\/[^\s]+/gi,                 // tinyurl.com/...
+        /goo\.gl\/[^\s]+/gi,                      // goo.gl/...
+        /youtu\.be\/[^\s]+/gi,                    // youtu.be/...
+        /youtube\.com\/[^\s]+/gi,                 // youtube.com/...
+        /facebook\.com\/[^\s]+/gi,                // facebook.com/...
+        /fb\.com\/[^\s]+/gi,                      // fb.com/...
+        /instagram\.com\/[^\s]+/gi,               // instagram.com/...
+        /twitter\.com\/[^\s]+/gi,                  // twitter.com/...
+        /x\.com\/[^\s]+/gi,                       // x.com/...
+    ];
+
+    return linkPatterns.some(pattern => pattern.test(text));
+}
+
+/**
+ * Kiểm tra xem user hoặc chat có được miễn trừ khỏi kiểm tra link không
+ * @param {object} ctx - Telegram context
+ * @returns {boolean} - true nếu được miễn trừ, false nếu không
+ */
+function isExemptedFromLinkCheck(ctx) {
+    // Kiểm tra nếu là bot
+    if (ctx.from?.is_bot) {
+        return true;
+    }
+
+    // Kiểm tra nếu là admin với ID cụ thể: 8551427685
+    const userId = ctx.from?.id;
+    if (userId && String(userId) === '8551427685') {
+        return true;
+    }
+
+    // Kiểm tra nếu chat ID nằm trong danh sách được phép
+    const chatId = ctx.chat?.id;
+    if (chatId) {
+        const allowedChatIds = ['-5028764190', '-1003225717094', '8528915633'];
+        if (allowedChatIds.includes(String(chatId))) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+/**
+ * Kiểm tra và xóa tin nhắn chứa link (trừ admin, bot và các chat được phép)
+ * @param {object} ctx - Telegram context
+ * @returns {Promise<boolean>} - true nếu đã xóa tin nhắn, false nếu không
+ */
+async function checkAndDeleteLinkMessage(ctx) {
+    // Chỉ xử lý trong group/supergroup, không xử lý trong private chat
+    if (!ctx.chat || ctx.chat.type === 'private') {
+        return false;
+    }
+
+    // Kiểm tra nếu được miễn trừ
+    if (isExemptedFromLinkCheck(ctx)) {
+        return false;
+    }
+
+    // Kiểm tra entities trước (đáng tin cậy hơn)
+    const entities = ctx.message?.entities || [];
+    const captionEntities = ctx.message?.caption_entities || [];
+    const hasLinkEntity = entities.some(e => e.type === 'url' || e.type === 'text_link') ||
+                         captionEntities.some(e => e.type === 'url' || e.type === 'text_link');
+
+    // Kiểm tra tin nhắn text hoặc caption
+    const messageText = ctx.message?.text || ctx.message?.caption || '';
+    const hasLinkInText = containsLink(messageText);
+
+    // Nếu không có link trong text và không có link entity, bỏ qua
+    if (!hasLinkInText && !hasLinkEntity) {
+        return false;
+    }
+
+    // Bỏ qua nếu là lệnh (đã có xử lý riêng)
+    if (messageText && isCommandMessage(messageText)) {
+        return false;
+    }
+
+    const messageId = ctx.message?.message_id;
+    if (!messageId) {
+        return false;
+    }
+
+    try {
+        // Xóa tin nhắn
+        await ctx.telegram.deleteMessage(ctx.chat.id, messageId);
+        console.log(`[TelegramBot] Đã xóa tin nhắn chứa link. Chat ID: ${ctx.chat.id}, Message ID: ${messageId}, User ID: ${ctx.from?.id}`);
+
+        // Thông báo cho người dùng
+        const userMention = ctx.from?.id
+            ? `<a href="tg://user?id=${ctx.from.id}">${ctx.from.first_name || 'Bạn'}</a>`
+            : 'Bạn';
+
+        const warningMessage = await ctx.reply(
+            `${userMention}, <b>Không cho phép Spam Link</b>`,
+            { parse_mode: 'HTML' }
+        );
+
+        // Lên lịch xóa tin nhắn cảnh báo sau 3 phút
+        if (warningMessage && warningMessage.message_id) {
+            scheduleMessageDeletion(ctx.chat.id, warningMessage.message_id, ctx.telegram, 180000);
+        }
+
+        return true;
+    } catch (error) {
+        const errorMessage = error.message || error.description || '';
+        const errorCode = error.response?.error_code || error.code;
+
+        // Các lỗi cho biết không thể xóa
+        if (errorCode === 400 || errorCode === 403 || errorCode === 404 ||
+            errorMessage.includes("can't be deleted") ||
+            errorMessage.includes("message not found") ||
+            errorMessage.includes("not found") ||
+            errorMessage.includes("no rights")) {
+            console.log(`[TelegramBot] Không thể xóa tin nhắn chứa link (có thể bot chưa có quyền admin hoặc tin nhắn quá cũ): ${errorMessage}`);
+        } else {
+            console.log(`[TelegramBot] Lỗi khi xóa tin nhắn chứa link: ${errorMessage}`);
+        }
+        return false;
+    }
+}
+
+/**
  * Xóa các tin nhắn cũ của cùng một loại lệnh và lưu tin nhắn mới
  * @param {number} chatId - Chat ID
  * @param {string} commandType - Loại lệnh (ví dụ: 'member_count', 'inactive_today', 'soicau_thongke')
@@ -2662,6 +2803,14 @@ module.exports = function initTelegramBot() {
         // Kiểm tra và xóa tin nhắn spam số (chứa từ 15 cặp số 2 chữ số trở lên)
         if (ctx.message && ctx.message.text) {
             const deleted = await checkAndDeleteNumberSpamMessage(ctx);
+            if (deleted) {
+                return; // Dừng middleware chain nếu đã xóa tin nhắn
+            }
+        }
+
+        // Kiểm tra và xóa tin nhắn chứa link (trừ admin, bot và các chat được phép)
+        if (ctx.message) {
+            const deleted = await checkAndDeleteLinkMessage(ctx);
             if (deleted) {
                 return; // Dừng middleware chain nếu đã xóa tin nhắn
             }
