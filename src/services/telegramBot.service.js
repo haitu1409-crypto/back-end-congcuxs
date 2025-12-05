@@ -370,11 +370,25 @@ function containsLink(text) {
         return false;
     }
 
-    // Pattern để phát hiện các loại link phổ biến
+    // Danh sách domain spam cần chặn cụ thể (để cảnh báo rõ ràng hơn)
+    const spamDomains = [
+        'cattuong.vercel.app',
+        // Có thể thêm các domain spam khác vào đây
+    ];
+
+    // Kiểm tra domain spam cụ thể (case-insensitive)
+    const lowerText = text.toLowerCase();
+    for (const domain of spamDomains) {
+        if (lowerText.includes(domain.toLowerCase())) {
+            return true;
+        }
+    }
+
+    // Pattern để phát hiện TẤT CẢ các loại link (bao gồm cả không có protocol)
     const linkPatterns = [
         /https?:\/\/[^\s]+/gi,                    // http:// hoặc https://
-        /www\.[^\s]+/gi,                          // www.example.com
-        /[a-zA-Z0-9-]+\.[a-zA-Z]{2,}[^\s]*/gi,    // example.com, example.co.uk
+        /www\.[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}[^\s]*/gi,  // www.example.com (cải thiện)
+        /[a-zA-Z0-9][a-zA-Z0-9-]*[a-zA-Z0-9]*\.[a-zA-Z]{2,}(\/[^\s]*)?/gi,  // example.com hoặc example.com/path
         /t\.me\/[^\s]+/gi,                        // t.me/...
         /telegram\.me\/[^\s]+/gi,                 // telegram.me/...
         /bit\.ly\/[^\s]+/gi,                      // bit.ly/...
@@ -409,10 +423,11 @@ function isExemptedFromLinkCheck(ctx) {
         return true;
     }
 
-    // Kiểm tra nếu chat ID nằm trong danh sách được phép
+    // Kiểm tra nếu chat ID nằm trong danh sách được phép từ biến môi trường
     const chatId = ctx.chat?.id;
     if (chatId) {
-        const allowedChatIds = ['-5028764190', '-1003225717094', '8528915633'];
+        // Lấy danh sách chat được phép từ biến môi trường TELEGRAM_ALLOWED_CHAT_IDS
+        const allowedChatIds = parseAllowedChats();
         if (allowedChatIds.includes(String(chatId))) {
             return true;
         }
@@ -473,7 +488,8 @@ async function checkAndDeleteLinkMessage(ctx) {
             : 'Bạn';
 
         const warningMessage = await ctx.reply(
-            `${userMention}, <b>Không cho phép Spam Link</b>`,
+            `${userMention}, <b>⚠️ Không cho phép gửi link spam!</b>\n\n` +
+            `<i>Tin nhắn của bạn đã bị xóa vì chứa link.</i>`,
             { parse_mode: 'HTML' }
         );
 
