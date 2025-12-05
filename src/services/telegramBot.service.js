@@ -53,13 +53,17 @@ const DEFAULT_AUTO_SCHEDULE_TIME_NOTIFICATION_RESULT = process.env.TELEGRAM_AUTO
 const DEFAULT_AUTO_SCHEDULE_TIME_SINGUP_FORECAST = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP_FORECAST || '18:01';
 const DEFAULT_AUTO_SCHEDULE_TIME_STATISTICAL_RESULT = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_STATISTICAL_RESULT || '18:35';
 const DEFAULT_AUTO_SCHEDULE_TIME_SINGUP = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP || '18:00';
-const DEFAULT_AUTO_SCHEDULE_TIME_CHUNGMUNG = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_CHUNGMUNG || '16:00,17:30';
+const DEFAULT_AUTO_SCHEDULE_TIME_CHUNGMUNG = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_CHUNGMUNG || '18:00';
 const DEFAULT_INACTIVE_REMINDER_TIME = process.env.TELEGRAM_INACTIVE_REMINDER_TIME || '09:00';
 const INACTIVE_THRESHOLD_HOURS = Number(process.env.TELEGRAM_INACTIVE_THRESHOLD_HOURS) || 48;
 const INACTIVE_REMINDER_COOLDOWN_HOURS = Number(process.env.TELEGRAM_INACTIVE_REMINDER_COOLDOWN_HOURS) || 24;
 const INACTIVE_REMINDER_BATCH_LIMIT = Number(process.env.TELEGRAM_INACTIVE_REMINDER_BATCH_LIMIT) || 20;
 const autoScheduleChatsEnv = parseChatList(process.env.TELEGRAM_AUTO_SCHEDULE_CHAT_IDS);
 const autoScheduleChats = autoScheduleChatsEnv.length ? autoScheduleChatsEnv : allowedChats;
+
+// ✅ Danh sách chat nhận tường thuật xổ số trực tiếp (live result)
+// Chỉ gửi vào supergroup chat cụ thể: -1003225717094
+const liveResultChats = ['-1003225717094'];
 const SUPPORTED_SCHEDULE_TYPES = ['xsmb', 'prediction_result', 'prediction_list', 'prediction_signup_close', 'prediction_stats', 'inactive_reminder', 'chuc_mung'];
 const scheduledJobs = new Map();
 
@@ -1190,76 +1194,78 @@ async function triggerScheduledJob(bot, chatId, type) {
         }
     }
 
-    if (type === 'prediction_stats') {
-        const actualChatId = getMigratedChatId(chatId);
-        console.log(`[TelegramBot] ⏰ Trigger scheduled job ${type} cho chat ${actualChatId} lúc ${new Date().toLocaleString('vi-VN', { timeZone: DEFAULT_SCHEDULE_TIMEZONE })}`);
-        try {
-            if (!predictionHandlersInstance) {
-                console.warn('[TelegramBot] ⚠️ predictionHandlersInstance chưa được khởi tạo');
-                return true;
-            }
-            const fakeCtx = createCtxForChat(bot, actualChatId);
-            await predictionHandlersInstance.announceGlobalStats(fakeCtx);
-            console.log(`[TelegramBot] ✅ Đã gửi thống kê kết quả dự đoán cho chat ${actualChatId}`);
-            return true;
-        } catch (error) {
-            // Xử lý migrate chat_id
-            const migratedChatId = handleChatMigration(error, actualChatId);
-            if (migratedChatId) {
-                try {
-                    return await triggerScheduledJob(bot, migratedChatId, type);
-                } catch (retryError) {
-                    console.error(`[TelegramBot] Lỗi khi retry triggerScheduledJob với chat_id mới ${migratedChatId}:`, retryError);
-                }
-            }
-            console.error(`[TelegramBot] ❌ Lỗi khi gửi thống kê kết quả dự đoán cho chat ${actualChatId}:`, error);
-            throw error;
-        }
-    }
+    // ✅ ĐÃ TẮT: Logic thông báo tự động thống kê kết quả dự đoán (giữ lệnh soicau thongke thủ công)
+    // if (type === 'prediction_stats') {
+    //     const actualChatId = getMigratedChatId(chatId);
+    //     console.log(`[TelegramBot] ⏰ Trigger scheduled job ${type} cho chat ${actualChatId} lúc ${new Date().toLocaleString('vi-VN', { timeZone: DEFAULT_SCHEDULE_TIMEZONE })}`);
+    //     try {
+    //         if (!predictionHandlersInstance) {
+    //             console.warn('[TelegramBot] ⚠️ predictionHandlersInstance chưa được khởi tạo');
+    //             return true;
+    //         }
+    //         const fakeCtx = createCtxForChat(bot, actualChatId);
+    //         await predictionHandlersInstance.announceGlobalStats(fakeCtx);
+    //         console.log(`[TelegramBot] ✅ Đã gửi thống kê kết quả dự đoán cho chat ${actualChatId}`);
+    //         return true;
+    //     } catch (error) {
+    //         // Xử lý migrate chat_id
+    //         const migratedChatId = handleChatMigration(error, actualChatId);
+    //         if (migratedChatId) {
+    //             try {
+    //                 return await triggerScheduledJob(bot, migratedChatId, type);
+    //             } catch (retryError) {
+    //                 console.error(`[TelegramBot] Lỗi khi retry triggerScheduledJob với chat_id mới ${migratedChatId}:`, retryError);
+    //             }
+    //         }
+    //         console.error(`[TelegramBot] ❌ Lỗi khi gửi thống kê kết quả dự đoán cho chat ${actualChatId}:`, error);
+    //         throw error;
+    //     }
+    // }
 
-    if (type === 'prediction_signup_close') {
-        const actualChatId = getMigratedChatId(chatId);
-        console.log(`[TelegramBot] ⏰ Trigger scheduled job ${type} cho chat ${actualChatId} lúc ${new Date().toLocaleString('vi-VN', { timeZone: DEFAULT_SCHEDULE_TIMEZONE })}`);
-        try {
-            const fakeCtx = createCtxForChat(bot, actualChatId);
+    // ✅ ĐÃ TẮT: Logic thông báo đóng đăng ký dự đoán lúc 18:00
+    // if (type === 'prediction_signup_close') {
+    //     const actualChatId = getMigratedChatId(chatId);
+    //     console.log(`[TelegramBot] ⏰ Trigger scheduled job ${type} cho chat ${actualChatId} lúc ${new Date().toLocaleString('vi-VN', { timeZone: DEFAULT_SCHEDULE_TIMEZONE })}`);
+    //     try {
+    //         const fakeCtx = createCtxForChat(bot, actualChatId);
 
-            // Gửi thông báo đăng ký đã đóng
-            const today = new Date();
-            const todayStr = today.toLocaleDateString('vi-VN');
-            const message = [
-                '<b>🔒 ĐĂNG KÝ DỰ ĐOÁN ĐÃ ĐÓNG</b>',
-                '',
-                `<b>⏰ Thời gian đăng ký cho hôm nay (${todayStr}) đã kết thúc lúc 18:00.</b>`,
-                '',
-                '<b>📋 Bạn có thể:</b>',
-                '• <b>Xem danh sách dự đoán:</b> /soicau danhsachdangky',
-                '• <b>Đăng ký cho ngày mai:</b> Sau 18:35',
-                '',
-                '<b>⏳ Kết quả xổ số sẽ được gửi lúc 18:36.</b>'
-            ].join('\n');
+    //         // Gửi thông báo đăng ký đã đóng
+    //         const today = new Date();
+    //         const todayStr = today.toLocaleDateString('vi-VN');
+    //         const message = [
+    //             '<b>🔒 ĐĂNG KÝ DỰ ĐOÁN ĐÃ ĐÓNG</b>',
+    //             '',
+    //             `<b>⏰ Thời gian đăng ký cho hôm nay (${todayStr}) đã kết thúc lúc 18:00.</b>`,
+    //             '',
+    //             '<b>📋 Bạn có thể:</b>',
+    //             '• <b>Xem danh sách dự đoán:</b> /soicau danhsachdangky',
+    //             '• <b>Đăng ký cho ngày mai:</b> Sau 18:35',
+    //             '',
+    //             '<b>⏳ Kết quả xổ số sẽ được gửi lúc 18:36.</b>'
+    //         ].join('\n');
 
-            const signupCloseMessage = await fakeCtx.reply(message, { parse_mode: 'HTML' });
-            console.log(`[TelegramBot] ✅ Đã gửi thông báo đóng đăng ký cho chat ${actualChatId} thành công`);
+    //         const signupCloseMessage = await fakeCtx.reply(message, { parse_mode: 'HTML' });
+    //         console.log(`[TelegramBot] ✅ Đã gửi thông báo đóng đăng ký cho chat ${actualChatId} thành công`);
 
-            // Lên lịch xóa tin nhắn sau 3 phút
-            if (signupCloseMessage && signupCloseMessage.message_id) {
-                scheduleMessageDeletion(actualChatId, signupCloseMessage.message_id, bot.telegram, 180000);
-            }
-            return true;
-        } catch (error) {
-            // Xử lý migrate chat_id
-            const migratedChatId = handleChatMigration(error, actualChatId);
-            if (migratedChatId) {
-                try {
-                    return await triggerScheduledJob(bot, migratedChatId, type);
-                } catch (retryError) {
-                    console.error(`[TelegramBot] Lỗi khi retry triggerScheduledJob với chat_id mới ${migratedChatId}:`, retryError);
-                }
-            }
-            console.error(`[TelegramBot] ❌ Lỗi khi gửi thông báo đóng đăng ký cho chat ${actualChatId}:`, error);
-            throw error;
-        }
-    }
+    //         // Lên lịch xóa tin nhắn sau 3 phút
+    //         if (signupCloseMessage && signupCloseMessage.message_id) {
+    //             scheduleMessageDeletion(actualChatId, signupCloseMessage.message_id, bot.telegram, 180000);
+    //         }
+    //         return true;
+    //     } catch (error) {
+    //         // Xử lý migrate chat_id
+    //         const migratedChatId = handleChatMigration(error, actualChatId);
+    //         if (migratedChatId) {
+    //             try {
+    //                 return await triggerScheduledJob(bot, migratedChatId, type);
+    //             } catch (retryError) {
+    //                 console.error(`[TelegramBot] Lỗi khi retry triggerScheduledJob với chat_id mới ${migratedChatId}:`, retryError);
+    //             }
+    //         }
+    //         console.error(`[TelegramBot] ❌ Lỗi khi gửi thông báo đóng đăng ký cho chat ${actualChatId}:`, error);
+    //         throw error;
+    //     }
+    // }
 
     if (type === 'inactive_reminder') {
         const actualChatId = getMigratedChatId(chatId);
@@ -1434,7 +1440,7 @@ function buildScheduleHelpText() {
         '- /schedule 18:35 prediction_stats  ➜ gửi thống kê kết quả dự đoán',
         '- /schedule 18:01 prediction_list  ➜ gửi danh sách dự đoán lúc 18:01',
         '- /schedule 18:00 prediction_signup_close  ➜ thông báo đăng ký đã đóng lúc 18:00',
-        '- /schedule 16:00 chuc_mung  ➜ gửi thông báo chúc mừng lúc 16:00',
+        '- /schedule 18:00 chuc_mung  ➜ gửi thông báo chúc mừng lúc 18:00',
         '- /schedule 09:00 inactive_reminder  ➜ nhắc thành viên ít tương tác',
         '- /schedule off xsmb    ➜ tắt nhắc kết quả XSMB',
         '- /schedule off prediction_result  ➜ tắt thông báo kết quả dự đoán',
@@ -1486,6 +1492,10 @@ function setupLotterySocketRealtime(bot) {
     // Map để lưu chat_id migration (old chat_id -> new supergroup chat_id)
     // Key: oldChatId, Value: newChatId
     const chatIdMigration = new Map();
+    
+    // Map để lock việc gửi message (tránh race condition gửi double)
+    // Key: chatId, Value: Promise đang chờ
+    const sendingLocks = new Map();
 
     // Hàm kết nối socket (chỉ kết nối trong khung giờ live)
     function connectSocketIfInLiveWindow() {
@@ -1681,35 +1691,97 @@ function setupLotterySocketRealtime(bot) {
 
     // Hàm gửi/update message tổng hợp đến chat
     async function sendOrUpdateLiveResult(chatId, liveData) {
-        try {
-            // Kiểm tra xem chat_id có bị migrate không
-            let actualChatId = chatId;
-            if (chatIdMigration.has(String(chatId))) {
-                actualChatId = chatIdMigration.get(String(chatId));
-                console.log(`[TelegramBot] 🔄 Using migrated chat_id: ${chatId} -> ${actualChatId}`);
-            }
-            
-            const commandType = 'live-xsmb';
-            const key = `${actualChatId}:${commandType}`;
+        // Kiểm tra xem chat_id có bị migrate không
+        let actualChatId = chatId;
+        if (chatIdMigration.has(String(chatId))) {
+            actualChatId = chatIdMigration.get(String(chatId));
+            console.log(`[TelegramBot] 🔄 Using migrated chat_id: ${chatId} -> ${actualChatId}`);
+        }
+        
+        const chatIdKey = String(actualChatId);
+        
+        // ✅ FIX: Kiểm tra lock để tránh gửi đồng thời (race condition)
+        if (sendingLocks.has(chatIdKey)) {
+            // Đang có request đang xử lý, đợi nó hoàn thành trước
+            await sendingLocks.get(chatIdKey);
+            // Sau khi đợi xong, kiểm tra lại xem có cần gửi không (có thể đã được gửi bởi request trước)
+            return;
+        }
+        
+        // Tạo promise lock
+        const sendPromise = (async () => {
+            try {
+                const commandType = 'live-xsmb';
+                const key = `${actualChatId}:${commandType}`;
 
-            // Format message tổng hợp
-            const message = formatLiveResultMessage(liveData);
-            const isComplete = liveData.isComplete || false;
+                // Format message tổng hợp
+                const message = formatLiveResultMessage(liveData);
+                const isComplete = liveData.isComplete || false;
 
-            // Gửi tin nhắn mới
-            const sentMsg = await bot.telegram.sendMessage(actualChatId, message, { parse_mode: 'HTML' });
-
-            if (sentMsg && sentMsg.message_id) {
-                // Xóa tin nhắn cũ và lưu tin nhắn mới
-                await deleteOldCommandMessages(actualChatId, commandType, sentMsg.message_id, bot.telegram);
-
-                if (isComplete) {
-                    console.log(`[TelegramBot] ✅ Đã gửi thông báo kết quả hoàn tất cho chat ${actualChatId}, message ID: ${sentMsg.message_id}`);
+                // ✅ FIX: Xóa tin nhắn cũ TRƯỚC khi gửi tin nhắn mới (tránh double message)
+                // Lấy message IDs cũ từ Map hoặc database
+                let oldMessageIds = commandMessageIds.get(key);
+                if (!oldMessageIds || oldMessageIds.length === 0) {
+                    try {
+                        oldMessageIds = await TelegramCommandMessage.getMessageIds(String(actualChatId), commandType);
+                        if (oldMessageIds.length > 0) {
+                            commandMessageIds.set(key, oldMessageIds);
+                        }
+                    } catch (error) {
+                        console.error(`[TelegramBot] Lỗi khi lấy message IDs từ database:`, error);
+                        oldMessageIds = [];
+                    }
                 }
-            }
 
-            // Lưu liveData cho chat này (dùng actualChatId)
-            chatLiveData.set(String(actualChatId), liveData);
+                // Xóa tin nhắn cũ TRƯỚC khi gửi tin nhắn mới
+                if (oldMessageIds && oldMessageIds.length > 0) {
+                    for (const oldMessageId of oldMessageIds) {
+                        try {
+                            await bot.telegram.deleteMessage(actualChatId, oldMessageId);
+                        } catch (error) {
+                            // Ignore lỗi xóa (tin nhắn quá cũ, đã bị xóa, etc.)
+                            const errorCode = error.response?.error_code || error.code;
+                            if (errorCode !== 400 && errorCode !== 403 && errorCode !== 404) {
+                                console.log(`[TelegramBot] Không thể xóa tin nhắn cũ ${oldMessageId}: ${error.message}`);
+                            }
+                        }
+                    }
+                    // Clear old message IDs sau khi xóa
+                    commandMessageIds.set(key, []);
+                }
+
+                // Gửi tin nhắn mới
+                const sentMsg = await bot.telegram.sendMessage(actualChatId, message, { parse_mode: 'HTML' });
+
+                if (sentMsg && sentMsg.message_id) {
+                    // Lưu message ID mới
+                    const newMessageIds = [sentMsg.message_id];
+                    commandMessageIds.set(key, newMessageIds);
+                    
+                    // Lưu vào database
+                    try {
+                        await TelegramCommandMessage.saveMessageIds(String(actualChatId), commandType, newMessageIds);
+                    } catch (error) {
+                        console.error(`[TelegramBot] Lỗi khi lưu message IDs vào database:`, error);
+                    }
+
+                    if (isComplete) {
+                        console.log(`[TelegramBot] ✅ Đã gửi thông báo kết quả hoàn tất cho chat ${actualChatId}, message ID: ${sentMsg.message_id}`);
+                    }
+                }
+
+                // Lưu liveData cho chat này (dùng actualChatId)
+                chatLiveData.set(chatIdKey, liveData);
+            } catch (error) {
+                throw error;
+            }
+        })();
+        
+        // Lưu promise vào lock
+        sendingLocks.set(chatIdKey, sendPromise);
+        
+        try {
+            await sendPromise;
         } catch (error) {
             // Xử lý lỗi migrate chat_id
             if (error.response && error.response.error_code === 400 && 
@@ -1738,14 +1810,17 @@ function setupLotterySocketRealtime(bot) {
             } else {
                 console.error(`[TelegramBot] Lỗi khi gửi/update live result cho chat ${chatId}:`, error);
             }
+        } finally {
+            // ✅ FIX: Xóa lock sau khi hoàn thành (thành công hoặc lỗi)
+            sendingLocks.delete(chatIdKey);
         }
     }
 
     // Lắng nghe events từ socket
     telegramLotterySocketClient.on('lottery:latest', (liveData) => {
         console.log('[TelegramBot] 📡 Received latest lottery result');
-        // Gửi đến tất cả auto schedule chats
-        autoScheduleChats.forEach(chatId => {
+        // ✅ Chỉ gửi đến live result chats (supergroup: -1003225717094)
+        liveResultChats.forEach(chatId => {
             sendOrUpdateLiveResult(chatId, liveData);
         });
     });
@@ -1753,9 +1828,9 @@ function setupLotterySocketRealtime(bot) {
     telegramLotterySocketClient.on('lottery:prize-update', (data) => {
         console.log(`[TelegramBot] 📡 Received prize update: ${data.prizeType} = ${data.prizeData}`);
 
-        // Gửi update đến tất cả auto schedule chats
+        // ✅ Chỉ gửi update đến live result chats (supergroup: -1003225717094)
         // Logic giống frontend: update ngay lập tức khi nhận từng phần tử riêng lẻ
-        autoScheduleChats.forEach(chatId => {
+        liveResultChats.forEach(chatId => {
             // Lấy liveData hiện tại của chat này (hoặc dùng fullData từ event)
             const currentLiveData = chatLiveData.get(String(chatId)) || data.fullData || {};
 
@@ -1772,7 +1847,8 @@ function setupLotterySocketRealtime(bot) {
         console.log('[TelegramBot] 📡 Received complete result');
         // Đảm bảo isComplete được set thành true
         const completeLiveData = { ...liveData, isComplete: true };
-        autoScheduleChats.forEach(chatId => {
+        // ✅ Chỉ gửi đến live result chats (supergroup: -1003225717094)
+        liveResultChats.forEach(chatId => {
             // Chỉ gửi nếu chưa gửi complete message cho chat này
             if (!hasSentComplete.get(String(chatId))) {
                 sendOrUpdateLiveResult(chatId, completeLiveData);
@@ -1786,7 +1862,8 @@ function setupLotterySocketRealtime(bot) {
         // Chỉ xử lý full-update nếu chưa complete (tránh gửi lặp)
         const isComplete = liveData.isComplete || false;
         if (!isComplete) {
-            autoScheduleChats.forEach(chatId => {
+            // ✅ Chỉ gửi đến live result chats (supergroup: -1003225717094)
+            liveResultChats.forEach(chatId => {
                 // Reset flag nếu chưa complete
                 if (hasSentComplete.get(String(chatId))) {
                     hasSentComplete.set(String(chatId), false);
@@ -1864,35 +1941,35 @@ function setupDefaultSchedules(bot) {
         });
     }
 
-    // Setup schedule cho thống kê kết quả dự đoán
-    const statsTime = parseTimeInput(DEFAULT_AUTO_SCHEDULE_TIME_STATISTICAL_RESULT);
-    if (!statsTime) {
-        console.warn('[TelegramBot] TELEGRAM_AUTO_SCHEDULE_TIME_STATISTICAL_RESULT không hợp lệ, bỏ qua auto schedule thống kê kết quả.');
-    } else if (autoScheduleChats.length) {
-        autoScheduleChats.forEach((chatIdRaw) => {
-            const chatId = chatIdRaw.trim();
-            if (!chatId) return;
-            scheduleForChat({ bot, chatId, time: statsTime, type: 'prediction_stats' });
-            const hourStr = String(statsTime.hour).padStart(2, '0');
-            const minuteStr = String(statsTime.minute).padStart(2, '0');
-            console.log(`[TelegramBot] Auto schedule thống kê kết quả dự đoán ${hourStr}:${minuteStr} cho chat ${chatId}`);
-        });
-    }
+    // ✅ ĐÃ TẮT: Setup schedule cho thống kê kết quả dự đoán (giữ lệnh soicau thongke thủ công)
+    // const statsTime = parseTimeInput(DEFAULT_AUTO_SCHEDULE_TIME_STATISTICAL_RESULT);
+    // if (!statsTime) {
+    //     console.warn('[TelegramBot] TELEGRAM_AUTO_SCHEDULE_TIME_STATISTICAL_RESULT không hợp lệ, bỏ qua auto schedule thống kê kết quả.');
+    // } else if (autoScheduleChats.length) {
+    //     autoScheduleChats.forEach((chatIdRaw) => {
+    //         const chatId = chatIdRaw.trim();
+    //         if (!chatId) return;
+    //         scheduleForChat({ bot, chatId, time: statsTime, type: 'prediction_stats' });
+    //         const hourStr = String(statsTime.hour).padStart(2, '0');
+    //         const minuteStr = String(statsTime.minute).padStart(2, '0');
+    //         console.log(`[TelegramBot] Auto schedule thống kê kết quả dự đoán ${hourStr}:${minuteStr} cho chat ${chatId}`);
+    //     });
+    // }
 
-    // Setup schedule cho thông báo đóng đăng ký
-    const signupCloseTime = parseTimeInput(DEFAULT_AUTO_SCHEDULE_TIME_SINGUP);
-    if (!signupCloseTime) {
-        console.warn('[TelegramBot] TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP không hợp lệ, bỏ qua auto schedule thông báo đóng đăng ký.');
-    } else if (autoScheduleChats.length) {
-        autoScheduleChats.forEach((chatIdRaw) => {
-            const chatId = chatIdRaw.trim();
-            if (!chatId) return;
-            scheduleForChat({ bot, chatId, time: signupCloseTime, type: 'prediction_signup_close' });
-            const hourStr = String(signupCloseTime.hour).padStart(2, '0');
-            const minuteStr = String(signupCloseTime.minute).padStart(2, '0');
-            console.log(`[TelegramBot] Auto schedule thông báo đóng đăng ký ${hourStr}:${minuteStr} cho chat ${chatId}`);
-        });
-    }
+    // ✅ ĐÃ TẮT: Setup schedule cho thông báo đóng đăng ký
+    // const signupCloseTime = parseTimeInput(DEFAULT_AUTO_SCHEDULE_TIME_SINGUP);
+    // if (!signupCloseTime) {
+    //     console.warn('[TelegramBot] TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP không hợp lệ, bỏ qua auto schedule thông báo đóng đăng ký.');
+    // } else if (autoScheduleChats.length) {
+    //     autoScheduleChats.forEach((chatIdRaw) => {
+    //         const chatId = chatIdRaw.trim();
+    //         if (!chatId) return;
+    //         scheduleForChat({ bot, chatId, time: signupCloseTime, type: 'prediction_signup_close' });
+    //         const hourStr = String(signupCloseTime.hour).padStart(2, '0');
+    //         const minuteStr = String(signupCloseTime.minute).padStart(2, '0');
+    //         console.log(`[TelegramBot] Auto schedule thông báo đóng đăng ký ${hourStr}:${minuteStr} cho chat ${chatId}`);
+    //     });
+    // }
 
     // Setup schedule nhắc thành viên ít tương tác
     const inactiveReminderTime = parseTimeInput(DEFAULT_INACTIVE_REMINDER_TIME);
@@ -1909,7 +1986,7 @@ function setupDefaultSchedules(bot) {
         });
     }
 
-    // Setup schedule cho thông báo chúc mừng - schedule nhiều khung giờ (mặc định: 16:00, 17:30)
+    // Setup schedule cho thông báo chúc mừng - schedule lúc 18:00 (hỗ trợ nhiều khung giờ nếu cần)
     const chucMungTimeStrings = DEFAULT_AUTO_SCHEDULE_TIME_CHUNGMUNG.split(',').map(s => s.trim()).filter(Boolean);
     const chucMungScheduleTimes = [];
 

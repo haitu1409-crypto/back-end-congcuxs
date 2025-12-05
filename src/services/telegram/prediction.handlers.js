@@ -698,7 +698,7 @@ function buildListMessage(predictions, normalizedDate) {
 
     let message = `<b>📋 DANH SÁCH DỰ ĐOÁN</b>\n`;
     message += `<i>📅 Ngày:</i> <b>${displayDate}</b>\n`;
-    message += `<i>👥 Tổng số người tham gia:</i> <b>${totalPredictions}</b>\n\n`;
+    message += `<i>👥 Tổng số người tham gia:</i> <b>${totalPredictions}</b>\n`;
 
     predictions.forEach((prediction, index) => {
         const userMention = formatUserMention(prediction);
@@ -730,7 +730,7 @@ function buildListMessage(predictions, normalizedDate) {
                 message += ` : <code>soicau @${identifier}</code>`;
             }
             
-            message += `\n\n`;
+            message += `\n`;
 
             // Hiển thị số theo từng dàn
             const groupLines = prediction.groups
@@ -753,14 +753,14 @@ function buildListMessage(predictions, normalizedDate) {
                 .filter(Boolean);
             
             if (groupLines.length) {
-                message += `${groupLines.join('\n\n')}\n\n`;
+                message += `${groupLines.join('\n')}\n`;
             }
         } else {
             // Thêm lệnh để xem chi tiết nếu không có groups
             if (identifier) {
                 message += ` : <code>soicau @${identifier}</code>`;
             }
-            message += `\n\n`;
+            message += `\n`;
         }
     });
 
