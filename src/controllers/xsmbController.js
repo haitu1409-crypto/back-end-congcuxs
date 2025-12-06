@@ -849,17 +849,60 @@ const getDauDuoiStatsByDate = async (req, res) => {
             throw new Error('Tham số days là bắt buộc và phải là số. Các giá trị hợp lệ: 30, 60, 90, 120, 180, 270, 365.');
         }
 
-        const cacheKey = `dauDuoiByDate:${days}`;
+        // Lấy từ database model trước
+        const dbStats = await DauDuoiStats.findOne({ days: Number(days) });
 
-        const cached = memoryCache.get(cacheKey);
-        if (cached) {
-            console.log(`Trả về dữ liệu từ cache: ${cacheKey}`);
-            return res.status(200).json(cached);
+        if (dbStats && dbStats.dauStatsByDate && dbStats.duoiStatsByDate) {
+            console.log(`✅ Trả về dữ liệu từ database model: days=${days}`);
+            const result = {
+                dauStatsByDate: dbStats.dauStatsByDate,
+                duoiStatsByDate: dbStats.duoiStatsByDate,
+                metadata: dbStats.metadata
+            };
+            return res.status(200).json(result);
         }
 
+        // Nếu không có trong database, tính toán mới và lưu vào database
+        console.log(`⚠️ Không có dữ liệu trong database, đang tính toán...`);
         const result = await calculateDauDuoiStatsByDate(days);
-        memoryCache.set(cacheKey, result, 7200);
-        console.log(`Đã cache dữ liệu: ${cacheKey}`);
+
+        // Tự động lưu vào database để lần sau không phải tính lại
+        // Nếu đã có document với days này, cập nhật dauStatsByDate và duoiStatsByDate
+        // Nếu chưa có, tạo mới với đầy đủ thông tin
+        const existingDoc = await DauDuoiStats.findOne({ days: Number(days) });
+        if (existingDoc) {
+            // Cập nhật chỉ dauStatsByDate và duoiStatsByDate
+            existingDoc.dauStatsByDate = result.dauStatsByDate;
+            existingDoc.duoiStatsByDate = result.duoiStatsByDate;
+            existingDoc.metadata = {
+                ...existingDoc.metadata,
+                ...result.metadata
+            };
+            existingDoc.lastUpdated = new Date();
+            await existingDoc.save();
+        } else {
+            // Tạo mới document với đầy đủ thông tin
+            // Tính toán cả dauStats và duoiStats để có đầy đủ dữ liệu
+            const fullResult = await calculateDauDuoiStats(days);
+            await DauDuoiStats.findOneAndUpdate(
+                { days: Number(days) },
+                {
+                    days: Number(days),
+                    dauStats: fullResult.dauStats,
+                    duoiStats: fullResult.duoiStats,
+                    specialDauDuoiStats: fullResult.specialDauDuoiStats,
+                    dauStatsByDate: result.dauStatsByDate,
+                    duoiStatsByDate: result.duoiStatsByDate,
+                    metadata: {
+                        ...fullResult.metadata,
+                        ...result.metadata
+                    },
+                    lastUpdated: new Date()
+                },
+                { upsert: true, new: true }
+            );
+        }
+        console.log(`✅ Đã tự động lưu thống kê Đầu Đuôi theo ngày vào database: days=${days}`);
 
         res.status(200).json(result);
     } catch (error) {
@@ -1276,6 +1319,7 @@ module.exports = {
     calculateSpecialPrizeStats,
     calculateSpecialPrizeStatsByWeek,
     calculateDauDuoiStats,
+    calculateDauDuoiStatsByDate,
     calculateTanSuatLotoStats: calculateTanSuatLoto,
     calculateTanSuatLoCapStats: calculateTanSuatLoCap
 };
