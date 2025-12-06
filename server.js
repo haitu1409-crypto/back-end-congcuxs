@@ -32,6 +32,7 @@ const initTelegramBot = require('./src/services/telegramBot.service');
 
 const database = require('./src/config/database');
 const xsmbScheduler = require('./src/services/xsmbScheduler.service');
+const statsScheduler = require('./src/services/statsScheduler.service');
 // Keep-alive middleware removed for Pro version
 
 const app = express();
@@ -611,11 +612,14 @@ const startServer = async () => {
 
         // Initialize XSMB Scheduler
         xsmbScheduler.init();
+        // Khởi động stats scheduler để tự động cập nhật thống kê
+        statsScheduler.init();
 
         // Graceful shutdown
         process.on('SIGTERM', async () => {
             console.log('SIGTERM signal received: closing HTTP server');
             xsmbScheduler.stop();
+            statsScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();
