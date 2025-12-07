@@ -15,6 +15,19 @@ const {
 const { normalizeDateInput, formatDateForDisplay } = require('./date.utils');
 const PredictionScore = require('../../models/predictionScore.model');
 const UserPrediction = require('../../models/userPrediction.model');
+const NodeCache = require('node-cache');
+
+// Cache cho các queries thường xuyên (TTL: 30 giây)
+const queryCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
+
+// Rate limiting: Map lưu thời gian request cuối cùng của mỗi user
+const userRateLimit = new Map();
+const RATE_LIMIT_WINDOW = 1000; // 1 giây giữa các requests
+const MAX_CONCURRENT_REQUESTS = 10; // Tối đa 10 requests đồng thời
+
+// Queue để xử lý các lệnh tuần tự
+const commandQueue = new Map(); // Map<chatId, Queue>
+let activeRequests = 0;
 
 // Helper function để kiểm tra user có phải admin không
 function isAdmin(userId) {
@@ -29,6 +42,99 @@ function isAdmin(userId) {
         .filter(Boolean);
     
     return adminIdList.includes(String(userId));
+}
+
+/**
+ * Rate limiting: Kiểm tra xem user có thể thực hiện request không
+ */
+function checkRateLimit(userId) {
+    if (!userId) return false;
+    const userIdStr = String(userId);
+    const now = Date.now();
+    const lastRequest = userRateLimit.get(userIdStr) || 0;
+    
+    if (now - lastRequest < RATE_LIMIT_WINDOW) {
+        return false; // Quá nhanh
+    }
+    
+    userRateLimit.set(userIdStr, now);
+    return true;
+}
+
+/**
+ * Queue system để xử lý các lệnh tuần tự, tránh quá tải
+ */
+async function executeWithQueue(chatId, userId, commandFn) {
+    const chatIdStr = String(chatId);
+    
+    // Kiểm tra rate limit
+    if (!checkRateLimit(userId)) {
+        throw new Error('Vui lòng chờ một chút trước khi gửi lệnh tiếp theo.');
+    }
+    
+    // Kiểm tra số lượng requests đồng thời
+    if (activeRequests >= MAX_CONCURRENT_REQUESTS) {
+        throw new Error('Hệ thống đang bận, vui lòng thử lại sau.');
+    }
+    
+    activeRequests++;
+    
+    try {
+        // Nếu không có queue cho chat này, tạo mới
+        if (!commandQueue.has(chatIdStr)) {
+            commandQueue.set(chatIdStr, []);
+        }
+        
+        const queue = commandQueue.get(chatIdStr);
+        
+        // Tạo promise để xử lý trong queue
+        return new Promise((resolve, reject) => {
+            queue.push(async () => {
+                try {
+                    const result = await commandFn();
+                    resolve(result);
+                } catch (error) {
+                    reject(error);
+                } finally {
+                    activeRequests--;
+                    // Xóa queue nếu rỗng
+                    if (queue.length === 0) {
+                        commandQueue.delete(chatIdStr);
+                    }
+                }
+            });
+            
+            // Nếu đây là request đầu tiên trong queue, bắt đầu xử lý
+            if (queue.length === 1) {
+                processQueue(chatIdStr);
+            }
+        });
+    } catch (error) {
+        activeRequests--;
+        throw error;
+    }
+}
+
+/**
+ * Xử lý queue cho một chat
+ */
+async function processQueue(chatIdStr) {
+    const queue = commandQueue.get(chatIdStr);
+    if (!queue || queue.length === 0) {
+        commandQueue.delete(chatIdStr);
+        return;
+    }
+    
+    const command = queue.shift();
+    await command();
+    
+    // Xử lý command tiếp theo nếu có
+    if (queue.length > 0) {
+        // Đợi một chút để tránh quá tải
+        setTimeout(() => processQueue(chatIdStr), 50);
+    } else {
+        commandQueue.delete(chatIdStr);
+    }
 }
 
 const LETTER_REGEX = /[a-zA-ZÀ-ỹĐđ]/u;
@@ -417,18 +523,29 @@ async function findUserPredictionByIdentifier({ chatId, normalizedDate = null, i
     if (!chatId || !identifier) {
         return null;
     }
+    
+    // Cache key
+    const cacheKey = `findUser:${chatId}:${normalizedDate || 'all'}:${identifier}`;
+    const cached = queryCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+    
     const normalizedIdentifier = normalizeIdentifier(identifier);
     const query = { chatId: String(chatId) };
     if (normalizedDate) {
         query.normalizedDate = normalizedDate;
     }
     const limit = normalizedDate ? Math.min(searchLimit, 200) : searchLimit;
+    
+    // Tối ưu: chỉ select các fields cần thiết
     const candidates = await UserPrediction.find(query)
+        .select('userId username displayName normalizedDate')
         .sort({ updatedAt: -1 })
         .limit(limit)
         .lean();
 
-    return candidates.find(candidate => {
+    const result = candidates.find(candidate => {
         const normalizedUsername = normalizeIdentifier(candidate.username);
         const normalizedDisplayName = normalizeIdentifier(candidate.displayName);
         const candidateUserId = candidate.userId ? String(candidate.userId) : '';
@@ -440,6 +557,13 @@ async function findUserPredictionByIdentifier({ chatId, normalizedDate = null, i
             (candidateUserId && candidateUserId === normalizedIdentifier)
         );
     }) || null;
+    
+    // Cache kết quả
+    if (result) {
+        queryCache.set(cacheKey, result, 30); // Cache 30 giây
+    }
+    
+    return result;
 }
 
 function determineLabelByCount(count) {
@@ -837,15 +961,32 @@ async function buildScoreMap(chatId, userIds = []) {
     const map = new Map();
     if (!chatId) return map;
 
+    // Cache key
+    const userIdsKey = Array.isArray(userIds) && userIds.length > 0 
+        ? userIds.sort().join(',') 
+        : 'all';
+    const cacheKey = `scoreMap:${chatId}:${userIdsKey}`;
+    const cached = queryCache.get(cacheKey);
+    if (cached) {
+        return cached;
+    }
+
     const query = { chatId: String(chatId) };
     if (Array.isArray(userIds) && userIds.length > 0) {
         query.userId = { $in: userIds.map(String) };
     }
 
-    const scores = await PredictionScore.find(query).lean();
+    // Tối ưu: chỉ select các fields cần thiết
+    const scores = await PredictionScore.find(query)
+        .select('userId points')
+        .lean();
+    
     scores.forEach((score) => {
         map.set(String(score.userId), score.points || 0);
     });
+
+    // Cache kết quả
+    queryCache.set(cacheKey, map, 30); // Cache 30 giây
 
     return map;
 }
@@ -853,6 +994,16 @@ async function buildScoreMap(chatId, userIds = []) {
 async function collectUserHitStats({ chatId, userIds = null, perUserLimit = MAX_HISTORY_PER_USER, maxUsers = MAX_STATS_USERS }) {
     if (!chatId) {
         return [];
+    }
+
+    // Cache key
+    const userIdsKey = Array.isArray(userIds) && userIds.length > 0 
+        ? userIds.sort().join(',') 
+        : 'all';
+    const cacheKey = `hitStats:${chatId}:${userIdsKey}`;
+    const cached = queryCache.get(cacheKey);
+    if (cached) {
+        return cached;
     }
 
     const query = {
@@ -879,9 +1030,11 @@ async function collectUserHitStats({ chatId, userIds = null, perUserLimit = MAX_
         query.userId = { $in: filteredUserIds };
     }
 
+    // Tối ưu: chỉ select các fields cần thiết và giới hạn số lượng
     const hits = await UserPrediction.find(query)
         .sort({ normalizedDate: -1, updatedAt: -1 })
         .select(['userId', 'username', 'displayName', 'normalizedDate', 'matchedLabel', 'matchedChamLabels', 'matchedNumbers'])
+        .limit(maxUsers * perUserLimit * 2) // Lấy nhiều hơn một chút để filter
         .lean();
 
     if (!hits.length) {
@@ -936,12 +1089,22 @@ async function collectUserHitStats({ chatId, userIds = null, perUserLimit = MAX_
         }
     }
 
+    // Cache kết quả
+    queryCache.set(cacheKey, stats, 60); // Cache 60 giây
+
     return stats;
 }
 
 async function getAllUserPredictions({ chatId, userId, limit = MAX_HISTORY_PER_USER }) {
     if (!chatId || !userId) {
         return [];
+    }
+
+    // Cache key
+    const cacheKey = `userPredictions:${chatId}:${userId}:${limit}`;
+    const cached = queryCache.get(cacheKey);
+    if (cached) {
+        return cached;
     }
 
     const cutoffDate = new Date();
@@ -958,19 +1121,25 @@ async function getAllUserPredictions({ chatId, userId, limit = MAX_HISTORY_PER_U
         query.normalizedDate = { $gte: cutoffKey };
     }
 
+    // Tối ưu: chỉ select các fields cần thiết
     const predictions = await UserPrediction.find(query)
         .sort({ normalizedDate: -1, updatedAt: -1 })
         .select(['normalizedDate', 'matchedLabel', 'matchedChamLabels', 'matchedNumbers', 'status'])
         .limit(limit)
         .lean();
 
-    return predictions.map(pred => ({
+    const result = predictions.map(pred => ({
         normalizedDate: pred.normalizedDate,
         label: pred.matchedLabel || null,
         status: pred.status || 'miss',
         chamLabels: Array.isArray(pred.matchedChamLabels) ? pred.matchedChamLabels : [],
         matchedNumbers: Array.isArray(pred.matchedNumbers) ? pred.matchedNumbers : []
     }));
+
+    // Cache kết quả
+    queryCache.set(cacheKey, result, 30); // Cache 30 giây
+
+    return result;
 }
 
 async function buildUserStatsMessage(stat, scoreMap, allPredictions = [], xsmbModel = null) {
@@ -1107,6 +1276,7 @@ const predictionMessageTimeouts = new Map();
 
 /**
  * Xóa các tin nhắn cũ của cùng một loại lệnh và lưu tin nhắn mới
+ * Tối ưu: Không block khi xóa tin nhắn
  */
 async function deleteOldPredictionCommandMessages(chatId, commandType, newMessageId, telegram, userId = null) {
     // Nếu có userId (dành cho thông báo chi tiết user), sử dụng key bao gồm userId
@@ -1114,7 +1284,7 @@ async function deleteOldPredictionCommandMessages(chatId, commandType, newMessag
     const key = userId ? `${chatId}:${commandType}:${userId}` : `${chatId}:${commandType}`;
     const oldMessageIds = predictionCommandMessageIds.get(key) || [];
 
-    // Hủy timeout và xóa các tin nhắn cũ
+    // Hủy timeout và xóa các tin nhắn cũ (không await để không block)
     for (const oldMessageId of oldMessageIds) {
         // Hủy timeout nếu có
         const timeoutKey = `${chatId}:${oldMessageId}`;
@@ -1124,12 +1294,11 @@ async function deleteOldPredictionCommandMessages(chatId, commandType, newMessag
             predictionMessageTimeouts.delete(timeoutKey);
         }
 
-        // Xóa tin nhắn cũ ngay lập tức
-        try {
-            await telegram.deleteMessage(chatId, oldMessageId);
-        } catch (error) {
+        // Xóa tin nhắn cũ không blocking (fire and forget)
+        telegram.deleteMessage(chatId, oldMessageId).catch(error => {
+            // Chỉ log lỗi, không throw để không block
             console.log(`[Prediction] Không thể xóa tin nhắn cũ ${oldMessageId}: ${error.message}`);
-        }
+        });
     }
 
     // Lưu message_id mới
@@ -1239,6 +1408,8 @@ function createPredictionHandlers({ xsmbModel }) {
     async function handleCommand(ctx) {
         try {
             const chatId = ctx.chat?.id;
+            const userId = ctx.from?.id;
+            
             if (!chatId) {
                 return ctx.reply(
                     `<b>❌ LỖI</b>\n\n<i>Không xác định được chat.</i>`,
@@ -1246,13 +1417,15 @@ function createPredictionHandlers({ xsmbModel }) {
                 );
             }
 
-            const messageText = ctx.message?.text || '';
-            console.log('[Prediction] handleCommand - Message text:', messageText);
-            const args = messageText.trim().split(/\s+/).slice(1) || [];
-            console.log('[Prediction] handleCommand - Parsed args:', args);
-            if (!args.length) {
-                return await replyAndCleanOldPrediction(ctx, 'soicau_help', buildHelpText(), { parse_mode: 'HTML' });
-            }
+            // Xử lý command trong queue để tránh quá tải
+            return await executeWithQueue(chatId, userId, async () => {
+                const messageText = ctx.message?.text || '';
+                console.log('[Prediction] handleCommand - Message text:', messageText);
+                const args = messageText.trim().split(/\s+/).slice(1) || [];
+                console.log('[Prediction] handleCommand - Parsed args:', args);
+                if (!args.length) {
+                    return await replyAndCleanOldPrediction(ctx, 'soicau_help', buildHelpText(), { parse_mode: 'HTML' });
+                }
 
             // Kiểm tra format: ngày + @username (ví dụ: 27-11 @username hoặc 27/11 @username)
             // Hoặc chỉ @username (xem ngày hiện tại)
@@ -1331,15 +1504,19 @@ function createPredictionHandlers({ xsmbModel }) {
                 return await handleUserDetail(ctx, normalizedDate, usernameTokenValue || username);
             }
 
-            return await handleSubmission(ctx, args);
+                return await handleSubmission(ctx, args);
+            });
         } catch (error) {
             console.error('[Prediction] Lỗi xử lý command:', error);
             // Nếu lỗi chưa được xử lý bởi các hàm con, trả về message lỗi chung
             if (ctx && ctx.reply) {
                 const errorMsg = error.message || 'Có lỗi xảy ra khi xử lý lệnh.';
-                return ctx.reply(`<b>❌ LỖI</b>\n\n<i>${errorMsg}</i>`, { parse_mode: 'HTML' });
+                return ctx.reply(`<b>❌ LỖI</b>\n\n<i>${errorMsg}</i>`, { parse_mode: 'HTML' }).catch(err => {
+                    console.error('[Prediction] Lỗi khi gửi message lỗi:', err);
+                });
             }
-            throw error;
+            // Không throw error để tránh crash server
+            return null;
         }
     }
 
@@ -1384,13 +1561,11 @@ function createPredictionHandlers({ xsmbModel }) {
             // ✅ CHẶN USER THƯỜNG DÙNG LỆNH SOICAU (BẤT KỲ SỐ LƯỢNG NÀO)
             // Chỉ admin mới được dùng lệnh soicau
             if (!isAdmin(userId)) {
-                // Xóa tin nhắn đăng ký soi cầu của người dùng
-                try {
-                    if (ctx.message && ctx.message.message_id && chatId) {
-                        await ctx.telegram.deleteMessage(chatId, ctx.message.message_id);
-                    }
-                } catch (deleteError) {
-                    console.log('[Prediction] Không thể xóa tin nhắn đăng ký:', deleteError.message);
+                // Xóa tin nhắn đăng ký soi cầu của người dùng (không blocking)
+                if (ctx.message && ctx.message.message_id && chatId) {
+                    ctx.telegram.deleteMessage(chatId, ctx.message.message_id).catch(deleteError => {
+                        console.log('[Prediction] Không thể xóa tin nhắn đăng ký:', deleteError.message);
+                    });
                 }
                 
                 // Sử dụng replyAndCleanOldPrediction để xóa thông báo cũ cùng loại và tự động xóa sau 1 phút
@@ -1448,16 +1623,19 @@ function createPredictionHandlers({ xsmbModel }) {
                 true // Tự động xóa sau 5 phút
             );
 
-            // Gửi thống kê trúng số của người dùng sau khi đăng ký thành công
-            try {
-                await sendStatsMessages(ctx, {
-                    userIds: [String(userId)],
-                    silentIfEmpty: true
-                });
-            } catch (statsError) {
-                console.error('[Prediction] Lỗi khi gửi thống kê sau đăng ký:', statsError);
-                // Không throw error để không ảnh hưởng đến việc đăng ký thành công
-            }
+            // Gửi thống kê trúng số của người dùng sau khi đăng ký thành công (không blocking)
+            // Sử dụng setTimeout để không block response
+            setTimeout(async () => {
+                try {
+                    await sendStatsMessages(ctx, {
+                        userIds: [String(userId)],
+                        silentIfEmpty: true
+                    });
+                } catch (statsError) {
+                    console.error('[Prediction] Lỗi khi gửi thống kê sau đăng ký:', statsError);
+                    // Không throw error để không ảnh hưởng đến việc đăng ký thành công
+                }
+            }, 100); // Delay 100ms để không block response
         } catch (error) {
             console.error('[Prediction] Lỗi ghi nhận dự đoán:', error);
             try {
@@ -1496,7 +1674,9 @@ function createPredictionHandlers({ xsmbModel }) {
             return ctx.reply(
                 `<b>❌ LỖI</b>\n\n<i>Không thể lấy danh sách dự đoán.</i>`,
                 { parse_mode: 'HTML' }
-            );
+            ).catch(err => {
+                console.error('[Prediction] Lỗi khi gửi message lỗi:', err);
+            });
         }
     }
 
@@ -1512,42 +1692,78 @@ function createPredictionHandlers({ xsmbModel }) {
 
     async function evaluatePendingPredictionsForChat(chatId, normalizedDates = null) {
         if (!xsmbModel || !chatId) return;
-        const query = {
-            chatId: String(chatId),
-            status: 'pending'
-        };
+        
+        // Thêm timeout để tránh block quá lâu
+        const timeoutPromise = new Promise((_, reject) => {
+            setTimeout(() => reject(new Error('Timeout evaluating predictions')), 30000); // 30 giây timeout
+        });
 
-        if (Array.isArray(normalizedDates) && normalizedDates.length) {
-            const sanitizedDates = normalizedDates.filter(Boolean);
-            if (sanitizedDates.length) {
-                query.normalizedDate = { $in: sanitizedDates };
-            }
-        }
+        try {
+            await Promise.race([
+                (async () => {
+                    const query = {
+                        chatId: String(chatId),
+                        status: 'pending'
+                    };
 
-        const pendingPredictions = await UserPrediction.find(query)
-            .select(['normalizedDate'])
-            .lean();
-        if (!pendingPredictions.length) {
-            return;
-        }
+                    if (Array.isArray(normalizedDates) && normalizedDates.length) {
+                        const sanitizedDates = normalizedDates.filter(Boolean);
+                        if (sanitizedDates.length) {
+                            query.normalizedDate = { $in: sanitizedDates };
+                        }
+                    }
 
-        const processedDates = new Set();
-        for (const prediction of pendingPredictions) {
-            const normalizedDate = prediction.normalizedDate;
-            if (!normalizedDate || processedDates.has(normalizedDate)) {
-                continue;
-            }
-            processedDates.add(normalizedDate);
+                    // Tối ưu: chỉ select field cần thiết
+                    const pendingPredictions = await UserPrediction.find(query)
+                        .select(['normalizedDate'])
+                        .limit(100) // Giới hạn số lượng để tránh quá tải
+                        .lean();
+                    
+                    if (!pendingPredictions.length) {
+                        return;
+                    }
 
-            const doc = await fetchResultDoc(normalizedDate);
-            if (!doc) {
-                continue;
-            }
+                    const processedDates = new Set();
+                    // Xử lý song song các ngày khác nhau để tăng tốc
+                    const datePromises = [];
+                    
+                    for (const prediction of pendingPredictions) {
+                        const normalizedDate = prediction.normalizedDate;
+                        if (!normalizedDate || processedDates.has(normalizedDate)) {
+                            continue;
+                        }
+                        processedDates.add(normalizedDate);
 
-            try {
-                await evaluatePredictions({ chatId: String(chatId), doc });
-            } catch (error) {
-                console.error(`[Prediction] evaluatePendingPredictionsForChat: Lỗi tổng hợp ngày ${normalizedDate}:`, error);
+                        datePromises.push(
+                            (async () => {
+                                const doc = await fetchResultDoc(normalizedDate);
+                                if (!doc) {
+                                    return;
+                                }
+
+                                try {
+                                    await evaluatePredictions({ chatId: String(chatId), doc });
+                                } catch (error) {
+                                    console.error(`[Prediction] evaluatePendingPredictionsForChat: Lỗi tổng hợp ngày ${normalizedDate}:`, error);
+                                }
+                            })()
+                        );
+                    }
+
+                    // Xử lý tối đa 5 ngày cùng lúc để tránh quá tải
+                    const batchSize = 5;
+                    for (let i = 0; i < datePromises.length; i += batchSize) {
+                        const batch = datePromises.slice(i, i + batchSize);
+                        await Promise.all(batch);
+                    }
+                })(),
+                timeoutPromise
+            ]);
+        } catch (error) {
+            if (error.message === 'Timeout evaluating predictions') {
+                console.error(`[Prediction] evaluatePendingPredictionsForChat: Timeout cho chatId ${chatId}`);
+            } else {
+                console.error(`[Prediction] evaluatePendingPredictionsForChat: Lỗi:`, error);
             }
         }
     }
@@ -1571,17 +1787,27 @@ function createPredictionHandlers({ xsmbModel }) {
             }
 
             // Query điểm cũ TRƯỚC KHI evaluatePredictions để tính điểm mới chính xác
-            const userIdsBeforeEval = await UserPrediction.find({
-                chatId: String(chatId),
-                normalizedDate
-            }).distinct('userId').lean();
+            // Tối ưu: Batch query với timeout
+            const userIdsBeforeEval = await Promise.race([
+                UserPrediction.find({
+                    chatId: String(chatId),
+                    normalizedDate
+                }).distinct('userId').lean(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+            ]).catch(() => []); // Fallback về mảng rỗng nếu timeout
 
             const oldScoresMap = new Map();
             if (chatId && userIdsBeforeEval.length > 0) {
-                const oldScores = await PredictionScore.find({
-                    chatId: String(chatId),
-                    userId: { $in: userIdsBeforeEval.map(String) }
-                }).lean();
+                // Tối ưu: chỉ select fields cần thiết và batch query
+                const oldScores = await Promise.race([
+                    PredictionScore.find({
+                        chatId: String(chatId),
+                        userId: { $in: userIdsBeforeEval.map(String) }
+                    })
+                    .select('userId points')
+                    .lean(),
+                    new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+                ]).catch(() => []); // Fallback về mảng rỗng nếu timeout
 
                 oldScores.forEach(score => {
                     oldScoresMap.set(String(score.userId), score.points || 0);
@@ -1602,7 +1828,9 @@ function createPredictionHandlers({ xsmbModel }) {
             return ctx.reply(
                 `<b>❌ LỖI</b>\n\n<i>Không thể tổng hợp kết quả dự đoán.</i>`,
                 { parse_mode: 'HTML' }
-            );
+            ).catch(err => {
+                console.error('[Prediction] Lỗi khi gửi message lỗi:', err);
+            });
         }
     }
 
@@ -1613,15 +1841,15 @@ function createPredictionHandlers({ xsmbModel }) {
         }
 
         // Xóa các tin nhắn cũ của lệnh này (chỉ khi là lệnh thống kê chính, không phải từ đăng ký)
+        // Tối ưu: Không block khi xóa tin nhắn
         if (commandType === 'soicau_thongke') {
             const key = `${chatId}:${commandType}`;
             const oldMessageIds = predictionCommandMessageIds.get(key) || [];
             for (const oldMessageId of oldMessageIds) {
-                try {
-                    await ctx.telegram.deleteMessage(chatId, oldMessageId);
-                } catch (error) {
+                // Xóa không blocking (fire and forget)
+                ctx.telegram.deleteMessage(chatId, oldMessageId).catch(error => {
                     console.log(`[Prediction] Không thể xóa tin nhắn cũ ${oldMessageId}: ${error.message}`);
-                }
+                });
             }
             predictionCommandMessageIds.set(key, []); // Reset array
         }
@@ -1806,7 +2034,9 @@ function createPredictionHandlers({ xsmbModel }) {
             return ctx.reply(
                 `<b>❌ LỖI</b>\n\n<i>Không thể lấy danh sách người dùng.</i>`,
                 { parse_mode: 'HTML' }
-            );
+            ).catch(err => {
+                console.error('[Prediction] Lỗi khi gửi message lỗi:', err);
+            });
         }
     }
 
@@ -1979,7 +2209,9 @@ function createPredictionHandlers({ xsmbModel }) {
             return ctx.reply(
                 `<b>❌ LỖI</b>\n\n<i>Không thể lấy chi tiết dự đoán.</i>`,
                 { parse_mode: 'HTML' }
-            );
+            ).catch(err => {
+                console.error('[Prediction] Lỗi khi gửi message lỗi:', err);
+            });
         }
     }
 
@@ -2003,17 +2235,27 @@ function createPredictionHandlers({ xsmbModel }) {
         }
 
         // Query điểm cũ TRƯỚC KHI evaluatePredictions để tính điểm mới chính xác
-        const userIdsBeforeEval = await UserPrediction.find({
-            chatId: String(chatId),
-            normalizedDate
-        }).distinct('userId').lean();
+        // Tối ưu: Batch query với timeout
+        const userIdsBeforeEval = await Promise.race([
+            UserPrediction.find({
+                chatId: String(chatId),
+                normalizedDate
+            }).distinct('userId').lean(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+        ]).catch(() => []); // Fallback về mảng rỗng nếu timeout
 
         const oldScoresMap = new Map();
         if (chatId && userIdsBeforeEval.length > 0) {
-            const oldScores = await PredictionScore.find({
-                chatId: String(chatId),
-                userId: { $in: userIdsBeforeEval.map(String) }
-            }).lean();
+            // Tối ưu: chỉ select fields cần thiết và batch query
+            const oldScores = await Promise.race([
+                PredictionScore.find({
+                    chatId: String(chatId),
+                    userId: { $in: userIdsBeforeEval.map(String) }
+                })
+                .select('userId points')
+                .lean(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+            ]).catch(() => []); // Fallback về mảng rỗng nếu timeout
 
             oldScores.forEach(score => {
                 oldScoresMap.set(String(score.userId), score.points || 0);
@@ -2066,17 +2308,27 @@ function createPredictionHandlers({ xsmbModel }) {
         }
 
         // Query điểm cũ TRƯỚC KHI evaluatePredictions để tính điểm mới chính xác
-        const userIdsBeforeEval = await UserPrediction.find({
-            chatId: String(chatId),
-            normalizedDate
-        }).distinct('userId').lean();
+        // Tối ưu: Batch query với timeout
+        const userIdsBeforeEval = await Promise.race([
+            UserPrediction.find({
+                chatId: String(chatId),
+                normalizedDate
+            }).distinct('userId').lean(),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+        ]).catch(() => []); // Fallback về mảng rỗng nếu timeout
 
         const oldScoresMap = new Map();
         if (chatId && userIdsBeforeEval.length > 0) {
-            const oldScores = await PredictionScore.find({
-                chatId: String(chatId),
-                userId: { $in: userIdsBeforeEval.map(String) }
-            }).lean();
+            // Tối ưu: chỉ select fields cần thiết và batch query
+            const oldScores = await Promise.race([
+                PredictionScore.find({
+                    chatId: String(chatId),
+                    userId: { $in: userIdsBeforeEval.map(String) }
+                })
+                .select('userId points')
+                .lean(),
+                new Promise((_, reject) => setTimeout(() => reject(new Error('Timeout')), 5000))
+            ]).catch(() => []); // Fallback về mảng rỗng nếu timeout
 
             oldScores.forEach(score => {
                 oldScoresMap.set(String(score.userId), score.points || 0);
