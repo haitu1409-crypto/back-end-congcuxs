@@ -71,6 +71,10 @@ const scheduledJobs = new Map();
 // Key: `${chatId}:${commandType}`, Value: Array of message_ids
 const commandMessageIds = new Map();
 
+// Map để theo dõi các request đang xử lý để tránh gửi thông báo loading trùng lặp
+// Key: `${chatId}:${commandType}`, Value: Promise đang xử lý
+const processingRequests = new Map();
+
 // Map để lưu chat_id migration (old chat_id -> new supergroup chat_id)
 // Key: oldChatId, Value: newChatId
 // Global để dùng chung cho tất cả các hàm
@@ -2498,6 +2502,31 @@ async function replyWithResult(ctx, fetcher) {
     const commandType = 'xsmb';
     const key = chatId ? `${chatId}:${commandType}` : null;
 
+    // Kiểm tra xem đã có request đang xử lý chưa để tránh gửi thông báo loading trùng lặp
+    if (key && processingRequests.has(key)) {
+        console.log(`[TelegramBot] Đã có request đang xử lý cho ${key}, bỏ qua request này để tránh gửi thông báo trùng lặp`);
+        try {
+            // Đợi request trước đó hoàn thành và return null để bỏ qua request này
+            await processingRequests.get(key);
+        } catch (error) {
+            // Ignore lỗi từ request trước
+        }
+        return null;
+    }
+
+    // Tạo promise để theo dõi request này
+    let processingPromise;
+    let resolveProcessing;
+    let rejectProcessing;
+    
+    if (key) {
+        processingPromise = new Promise((resolve, reject) => {
+            resolveProcessing = resolve;
+            rejectProcessing = reject;
+        });
+        processingRequests.set(key, processingPromise);
+    }
+
     // Xóa các tin nhắn cũ của lệnh /xsmb
     if (key) {
         const oldMessageIds = commandMessageIds.get(key) || [];
@@ -2533,7 +2562,7 @@ async function replyWithResult(ctx, fetcher) {
     const messageIds = [];
 
     try {
-        // Gửi thông báo loading ngay khi bắt đầu
+        // Gửi thông báo loading ngay khi bắt đầu (chỉ gửi nếu chưa có request đang xử lý)
         try {
             loadingMessage = await ctx.reply('⏳ Đang tải kết quả xổ số...');
             if (loadingMessage && loadingMessage.message_id) {
@@ -2573,6 +2602,11 @@ async function replyWithResult(ctx, fetcher) {
                     console.error(`[TelegramBot] Lỗi khi lưu message IDs vào database:`, error);
                 }
             }
+            // Xóa khỏi processingRequests khi có lỗi
+            if (key && rejectProcessing) {
+                rejectProcessing();
+                processingRequests.delete(key);
+            }
             return errorMsg;
         }
 
@@ -2601,6 +2635,12 @@ async function replyWithResult(ctx, fetcher) {
             }
         }
 
+        // Xóa khỏi processingRequests khi hoàn thành thành công
+        if (key && resolveProcessing) {
+            resolveProcessing();
+            processingRequests.delete(key);
+        }
+
         return response;
     } catch (error) {
         console.error('[TelegramBot] Lỗi xử lý kết quả:', error);
@@ -2608,12 +2648,18 @@ async function replyWithResult(ctx, fetcher) {
         // Xử lý migrate chat_id
         const migratedChatId = handleChatMigration(error, chatId);
         if (migratedChatId) {
+            // Cleanup processingRequests của key cũ trước khi retry
+            if (key && rejectProcessing) {
+                rejectProcessing();
+                processingRequests.delete(key);
+            }
             // Retry với chat_id mới
             try {
                 const newCtx = createCtxForChat(ctx.telegram, migratedChatId);
                 return await replyWithResult(newCtx, fetcher);
             } catch (retryError) {
                 console.error(`[TelegramBot] Lỗi khi retry với chat_id mới ${migratedChatId}:`, retryError);
+                // Nếu retry cũng fail, tiếp tục xử lý lỗi bình thường
             }
         }
 
@@ -2652,6 +2698,11 @@ async function replyWithResult(ctx, fetcher) {
             } catch (error) {
                 console.error(`[TelegramBot] Lỗi khi lưu message IDs vào database:`, error);
             }
+        }
+        // Xóa khỏi processingRequests khi có lỗi (chỉ nếu chưa được cleanup ở trên)
+        if (key && rejectProcessing && processingRequests.has(key)) {
+            rejectProcessing();
+            processingRequests.delete(key);
         }
         return errorMsg;
     }
