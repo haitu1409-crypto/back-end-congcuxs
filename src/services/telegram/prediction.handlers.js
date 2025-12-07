@@ -17,17 +17,48 @@ const PredictionScore = require('../../models/predictionScore.model');
 const UserPrediction = require('../../models/userPrediction.model');
 const NodeCache = require('node-cache');
 
-// Cache cho các queries thường xuyên (TTL: 30 giây)
-const queryCache = new NodeCache({ stdTTL: 30, checkperiod: 60 });
+// Cache cho các queries thường xuyên (TTL: 15 giây, max 100 entries để tiết kiệm memory)
+const queryCache = new NodeCache({ 
+    stdTTL: 15, 
+    checkperiod: 30,
+    maxKeys: 100, // Giới hạn số lượng keys trong cache
+    useClones: false // Không clone objects để tiết kiệm memory
+});
 
 // Rate limiting: Map lưu thời gian request cuối cùng của mỗi user
 const userRateLimit = new Map();
 const RATE_LIMIT_WINDOW = 1000; // 1 giây giữa các requests
 const MAX_CONCURRENT_REQUESTS = 10; // Tối đa 10 requests đồng thời
+const RATE_LIMIT_CLEANUP_INTERVAL = 5 * 60 * 1000; // Cleanup mỗi 5 phút
 
 // Queue để xử lý các lệnh tuần tự
 const commandQueue = new Map(); // Map<chatId, Queue>
 let activeRequests = 0;
+
+// Cleanup rate limit map định kỳ để tránh memory leak
+setInterval(() => {
+    const now = Date.now();
+    const cleanupThreshold = now - (RATE_LIMIT_WINDOW * 10); // Xóa entries cũ hơn 10 giây
+    
+    let cleaned = 0;
+    for (const [userId, lastRequest] of userRateLimit.entries()) {
+        if (lastRequest < cleanupThreshold) {
+            userRateLimit.delete(userId);
+            cleaned++;
+        }
+    }
+    
+    // Cleanup empty queues
+    for (const [chatId, queue] of commandQueue.entries()) {
+        if (!queue || queue.length === 0) {
+            commandQueue.delete(chatId);
+        }
+    }
+    
+    if (cleaned > 0) {
+        console.log(`[Prediction] Cleaned up ${cleaned} old rate limit entries`);
+    }
+}, RATE_LIMIT_CLEANUP_INTERVAL);
 
 // Helper function để kiểm tra user có phải admin không
 function isAdmin(userId) {
@@ -63,6 +94,7 @@ function checkRateLimit(userId) {
 
 /**
  * Queue system để xử lý các lệnh tuần tự, tránh quá tải
+ * Tối ưu memory: Giới hạn độ dài queue và cleanup định kỳ
  */
 async function executeWithQueue(chatId, userId, commandFn) {
     const chatIdStr = String(chatId);
@@ -77,6 +109,14 @@ async function executeWithQueue(chatId, userId, commandFn) {
         throw new Error('Hệ thống đang bận, vui lòng thử lại sau.');
     }
     
+    // Giới hạn độ dài queue để tránh memory leak
+    if (commandQueue.has(chatIdStr)) {
+        const queue = commandQueue.get(chatIdStr);
+        if (queue.length > 50) { // Giới hạn tối đa 50 commands trong queue
+            throw new Error('Queue quá dài, vui lòng thử lại sau.');
+        }
+    }
+    
     activeRequests++;
     
     try {
@@ -87,9 +127,16 @@ async function executeWithQueue(chatId, userId, commandFn) {
         
         const queue = commandQueue.get(chatIdStr);
         
-        // Tạo promise để xử lý trong queue
+        // Tạo promise để xử lý trong queue với timeout để tránh memory leak
         return new Promise((resolve, reject) => {
+            // Timeout sau 30 giây để tránh promise không bao giờ resolve
+            const timeout = setTimeout(() => {
+                activeRequests--;
+                reject(new Error('Request timeout'));
+            }, 30000);
+            
             queue.push(async () => {
+                clearTimeout(timeout);
                 try {
                     const result = await commandFn();
                     resolve(result);
@@ -117,6 +164,7 @@ async function executeWithQueue(chatId, userId, commandFn) {
 
 /**
  * Xử lý queue cho một chat
+ * Tối ưu memory: Cleanup queue sau khi xử lý xong
  */
 async function processQueue(chatIdStr) {
     const queue = commandQueue.get(chatIdStr);
@@ -125,15 +173,20 @@ async function processQueue(chatIdStr) {
         return;
     }
     
-    const command = queue.shift();
-    await command();
-    
-    // Xử lý command tiếp theo nếu có
-    if (queue.length > 0) {
-        // Đợi một chút để tránh quá tải
-        setTimeout(() => processQueue(chatIdStr), 50);
-    } else {
-        commandQueue.delete(chatIdStr);
+    try {
+        const command = queue.shift();
+        await command();
+    } catch (error) {
+        console.error(`[Prediction] Lỗi xử lý command trong queue:`, error);
+    } finally {
+        // Xử lý command tiếp theo nếu có
+        if (queue && queue.length > 0) {
+            // Đợi một chút để tránh quá tải
+            setTimeout(() => processQueue(chatIdStr), 50);
+        } else {
+            // Cleanup queue khi rỗng
+            commandQueue.delete(chatIdStr);
+        }
     }
 }
 
@@ -558,9 +611,9 @@ async function findUserPredictionByIdentifier({ chatId, normalizedDate = null, i
         );
     }) || null;
     
-    // Cache kết quả
+    // Cache kết quả (giảm TTL để tiết kiệm memory)
     if (result) {
-        queryCache.set(cacheKey, result, 30); // Cache 30 giây
+        queryCache.set(cacheKey, result, 15); // Cache 15 giây
     }
     
     return result;
@@ -985,8 +1038,8 @@ async function buildScoreMap(chatId, userIds = []) {
         map.set(String(score.userId), score.points || 0);
     });
 
-    // Cache kết quả
-    queryCache.set(cacheKey, map, 30); // Cache 30 giây
+    // Cache kết quả (giảm TTL để tiết kiệm memory)
+    queryCache.set(cacheKey, map, 15); // Cache 15 giây
 
     return map;
 }
@@ -1030,11 +1083,11 @@ async function collectUserHitStats({ chatId, userIds = null, perUserLimit = MAX_
         query.userId = { $in: filteredUserIds };
     }
 
-    // Tối ưu: chỉ select các fields cần thiết và giới hạn số lượng
+    // Tối ưu memory: Giảm số lượng records được lấy và chỉ select fields cần thiết
     const hits = await UserPrediction.find(query)
         .sort({ normalizedDate: -1, updatedAt: -1 })
         .select(['userId', 'username', 'displayName', 'normalizedDate', 'matchedLabel', 'matchedChamLabels', 'matchedNumbers'])
-        .limit(maxUsers * perUserLimit * 2) // Lấy nhiều hơn một chút để filter
+        .limit(Math.min(maxUsers * perUserLimit, 200)) // Giới hạn tối đa 200 records để tiết kiệm memory
         .lean();
 
     if (!hits.length) {
@@ -1089,8 +1142,8 @@ async function collectUserHitStats({ chatId, userIds = null, perUserLimit = MAX_
         }
     }
 
-    // Cache kết quả
-    queryCache.set(cacheKey, stats, 60); // Cache 60 giây
+    // Cache kết quả (giảm TTL để tiết kiệm memory)
+    queryCache.set(cacheKey, stats, 20); // Cache 20 giây
 
     return stats;
 }
@@ -1136,8 +1189,8 @@ async function getAllUserPredictions({ chatId, userId, limit = MAX_HISTORY_PER_U
         matchedNumbers: Array.isArray(pred.matchedNumbers) ? pred.matchedNumbers : []
     }));
 
-    // Cache kết quả
-    queryCache.set(cacheKey, result, 30); // Cache 30 giây
+    // Cache kết quả (giảm TTL để tiết kiệm memory)
+    queryCache.set(cacheKey, result, 15); // Cache 15 giây
 
     return result;
 }
@@ -1274,6 +1327,40 @@ const predictionCommandMessageIds = new Map();
 // Map để lưu timeout cho từng message_id (để xóa sau 5 phút)
 const predictionMessageTimeouts = new Map();
 
+// Cleanup các maps định kỳ để tránh memory leak
+const MAP_CLEANUP_INTERVAL = 10 * 60 * 1000; // Cleanup mỗi 10 phút
+setInterval(() => {
+    // Cleanup predictionCommandMessageIds - giữ tối đa 1000 entries
+    if (predictionCommandMessageIds.size > 1000) {
+        const entries = Array.from(predictionCommandMessageIds.entries());
+        // Xóa các entries cũ nhất
+        const toDelete = entries.slice(0, entries.length - 500);
+        toDelete.forEach(([key]) => predictionCommandMessageIds.delete(key));
+        console.log(`[Prediction] Cleaned up ${toDelete.length} old message IDs`);
+    }
+    
+    // Cleanup predictionMessageTimeouts - xóa các timeout đã hết hạn
+    let cleanedTimeouts = 0;
+    for (const [key, timeout] of predictionMessageTimeouts.entries()) {
+        // Kiểm tra nếu timeout đã được clear hoặc không còn hợp lệ
+        if (!timeout || (typeof timeout === 'object' && timeout._destroyed)) {
+            predictionMessageTimeouts.delete(key);
+            cleanedTimeouts++;
+        }
+    }
+    
+    if (cleanedTimeouts > 0) {
+        console.log(`[Prediction] Cleaned up ${cleanedTimeouts} old timeouts`);
+    }
+    
+    // Cleanup cache nếu quá lớn
+    const cacheStats = queryCache.getStats();
+    if (cacheStats.keys > 100) {
+        queryCache.flushAll();
+        console.log(`[Prediction] Flushed cache (had ${cacheStats.keys} keys)`);
+    }
+}, MAP_CLEANUP_INTERVAL);
+
 /**
  * Xóa các tin nhắn cũ của cùng một loại lệnh và lưu tin nhắn mới
  * Tối ưu: Không block khi xóa tin nhắn
@@ -1318,6 +1405,7 @@ function scheduleMessageDeletion(chatId, messageId, telegram, commandType, userI
     }
 
     // Đặt timeout 5 phút (300000ms) để xóa tin nhắn
+    // Tối ưu memory: Sử dụng unref để không giữ process alive
     const timeout = setTimeout(async () => {
         try {
             await telegram.deleteMessage(chatId, messageId);
@@ -1338,6 +1426,11 @@ function scheduleMessageDeletion(chatId, messageId, telegram, commandType, userI
             predictionMessageTimeouts.delete(timeoutKey);
         }
     }, 5 * 60 * 1000); // 5 phút = 300000ms
+    
+    // unref để không giữ process alive nếu chỉ còn timeout này
+    if (timeout.unref) {
+        timeout.unref();
+    }
 
     predictionMessageTimeouts.set(timeoutKey, timeout);
 }
@@ -1355,6 +1448,7 @@ function scheduleMessageDeletion1Min(chatId, messageId, telegram, commandType) {
     }
 
     // Đặt timeout 1 phút (60000ms) để xóa tin nhắn
+    // Tối ưu memory: Sử dụng unref để không giữ process alive
     const timeout = setTimeout(async () => {
         try {
             await telegram.deleteMessage(chatId, messageId);
@@ -1375,6 +1469,11 @@ function scheduleMessageDeletion1Min(chatId, messageId, telegram, commandType) {
             predictionMessageTimeouts.delete(timeoutKey);
         }
     }, 1 * 60 * 1000); // 1 phút = 60000ms
+    
+    // unref để không giữ process alive nếu chỉ còn timeout này
+    if (timeout.unref) {
+        timeout.unref();
+    }
 
     predictionMessageTimeouts.set(timeoutKey, timeout);
 }
@@ -1693,9 +1792,10 @@ function createPredictionHandlers({ xsmbModel }) {
     async function evaluatePendingPredictionsForChat(chatId, normalizedDates = null) {
         if (!xsmbModel || !chatId) return;
         
-        // Thêm timeout để tránh block quá lâu
+        // Thêm timeout để tránh block quá lâu và memory leak
         const timeoutPromise = new Promise((_, reject) => {
-            setTimeout(() => reject(new Error('Timeout evaluating predictions')), 30000); // 30 giây timeout
+            const timeout = setTimeout(() => reject(new Error('Timeout evaluating predictions')), 20000); // Giảm xuống 20 giây
+            if (timeout.unref) timeout.unref(); // Không giữ process alive
         });
 
         try {
@@ -1713,10 +1813,10 @@ function createPredictionHandlers({ xsmbModel }) {
                         }
                     }
 
-                    // Tối ưu: chỉ select field cần thiết
+                    // Tối ưu memory: Giảm số lượng records và chỉ select field cần thiết
                     const pendingPredictions = await UserPrediction.find(query)
                         .select(['normalizedDate'])
-                        .limit(100) // Giới hạn số lượng để tránh quá tải
+                        .limit(50) // Giảm từ 100 xuống 50 để tiết kiệm memory
                         .lean();
                     
                     if (!pendingPredictions.length) {
@@ -1724,7 +1824,7 @@ function createPredictionHandlers({ xsmbModel }) {
                     }
 
                     const processedDates = new Set();
-                    // Xử lý song song các ngày khác nhau để tăng tốc
+                    // Xử lý song song các ngày khác nhau để tăng tốc nhưng giới hạn số lượng
                     const datePromises = [];
                     
                     for (const prediction of pendingPredictions) {
@@ -1733,6 +1833,11 @@ function createPredictionHandlers({ xsmbModel }) {
                             continue;
                         }
                         processedDates.add(normalizedDate);
+                        
+                        // Giới hạn số lượng promises để tránh memory leak
+                        if (datePromises.length >= 20) {
+                            break;
+                        }
 
                         datePromises.push(
                             (async () => {
@@ -1750,11 +1855,15 @@ function createPredictionHandlers({ xsmbModel }) {
                         );
                     }
 
-                    // Xử lý tối đa 5 ngày cùng lúc để tránh quá tải
-                    const batchSize = 5;
+                    // Xử lý tối đa 3 ngày cùng lúc để tránh quá tải và memory leak
+                    const batchSize = 3; // Giảm từ 5 xuống 3
                     for (let i = 0; i < datePromises.length; i += batchSize) {
                         const batch = datePromises.slice(i, i + batchSize);
                         await Promise.all(batch);
+                        // Cleanup sau mỗi batch để giải phóng memory
+                        if (i + batchSize < datePromises.length) {
+                            await new Promise(resolve => setTimeout(resolve, 100)); // Delay nhỏ giữa các batch
+                        }
                     }
                 })(),
                 timeoutPromise
