@@ -46,9 +46,8 @@ const allowedChats = parseAllowedChats();
 const controlChats = parseChatList(process.env.TELEGRAM_CONTROL_CHAT_IDS || '8317947476');
 const DEFAULT_SCHEDULE_TIMEZONE = process.env.TELEGRAM_TIMEZONE || 'Asia/Ho_Chi_Minh';
 const DEFAULT_AUTO_SCHEDULE_TIME = process.env.TELEGRAM_AUTO_SCHEDULE_TIME || '18:36';
-// Danh sách các khung giờ để tự động render XSMB (kiểm tra lần lượt, render 1 lần duy nhất)
-// Format: "18:31,18:32,18:33" hoặc "18:33" (chỉ 1 giờ)
-const DEFAULT_AUTO_SCHEDULE_TIMES = process.env.TELEGRAM_AUTO_SCHEDULE_TIMES || '18:31,18:32,18:33';
+// Thời gian để tự động render XSMB (chỉ 1 mốc thời gian duy nhất)
+const DEFAULT_AUTO_SCHEDULE_TIME_XSMB = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_XSMB || '18:35';
 const DEFAULT_AUTO_SCHEDULE_TIME_NOTIFICATION_RESULT = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_NOTIFICATION_RESULT || '18:37';
 const DEFAULT_AUTO_SCHEDULE_TIME_SINGUP_FORECAST = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP_FORECAST || '18:01';
 const DEFAULT_AUTO_SCHEDULE_TIME_STATISTICAL_RESULT = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_STATISTICAL_RESULT || '18:35';
@@ -1956,33 +1955,19 @@ function setupLotterySocketRealtime(bot) {
 }
 
 function setupDefaultSchedules(bot) {
-    // Setup schedule cho XSMB - schedule nhiều khung giờ (mặc định: 18:31, 18:32, 18:33)
-    // Parse danh sách các khung giờ từ env variable
-    const timeStrings = DEFAULT_AUTO_SCHEDULE_TIMES.split(',').map(s => s.trim()).filter(Boolean);
-    const scheduleTimes = [];
-
-    for (const timeStr of timeStrings) {
-        const parsedTime = parseTimeInput(timeStr);
-        if (parsedTime) {
-            scheduleTimes.push(parsedTime);
-        } else {
-            console.warn(`[TelegramBot] ⚠️ Thời gian "${timeStr}" trong TELEGRAM_AUTO_SCHEDULE_TIMES không hợp lệ, bỏ qua.`);
-        }
-    }
-
-    if (scheduleTimes.length === 0) {
-        console.warn('[TelegramBot] TELEGRAM_AUTO_SCHEDULE_TIMES không hợp lệ hoặc rỗng, bỏ qua auto schedule XSMB.');
+    // Setup schedule cho XSMB - chỉ schedule 1 lần lúc 18:35
+    const xsmbScheduleTime = parseTimeInput(DEFAULT_AUTO_SCHEDULE_TIME_XSMB);
+    if (!xsmbScheduleTime) {
+        console.warn('[TelegramBot] TELEGRAM_AUTO_SCHEDULE_TIME_XSMB không hợp lệ, bỏ qua auto schedule XSMB.');
     } else if (autoScheduleChats.length) {
         autoScheduleChats.forEach((chatIdRaw) => {
             const chatId = chatIdRaw.trim();
             if (!chatId) return;
-
-            scheduleTimes.forEach((scheduleTime) => {
-                scheduleForChat({ bot, chatId, time: scheduleTime, type: 'xsmb' });
-                const hourStr = String(scheduleTime.hour).padStart(2, '0');
-                const minuteStr = String(scheduleTime.minute).padStart(2, '0');
-                console.log(`[TelegramBot] Auto schedule XSMB ${hourStr}:${minuteStr} cho chat ${chatId}`);
-            });
+            
+            scheduleForChat({ bot, chatId, time: xsmbScheduleTime, type: 'xsmb' });
+            const hourStr = String(xsmbScheduleTime.hour).padStart(2, '0');
+            const minuteStr = String(xsmbScheduleTime.minute).padStart(2, '0');
+            console.log(`[TelegramBot] Auto schedule XSMB ${hourStr}:${minuteStr} cho chat ${chatId}`);
         });
     }
 
