@@ -16,6 +16,8 @@ const articleRoutes = require('./src/routes/article.routes');
 const predictionRoutes = require('./src/routes/prediction.routes');
 const uploadRoutes = require('./src/routes/upload.routes');
 const xsmbScraperRoutes = require('./src/routes/xsmbScraper.routes');
+const xsmnScraperRoutes = require('./src/routes/xsmnScraper.routes');
+const xsmnResultRoutes = require('./src/routes/xsmnResult.routes');
 const resultMBRoutes = require('./src/routes/resultMB.routes');
 const statsUpdateRoutes = require('./src/routes/statsUpdate.routes');
 const positionSoiCauRoutes = require('./src/routes/positionSoiCau.routes');
@@ -32,6 +34,7 @@ const initTelegramBot = require('./src/services/telegramBot.service');
 
 const database = require('./src/config/database');
 const xsmbScheduler = require('./src/services/xsmbScheduler.service');
+const xsmnScheduler = require('./src/services/xsmnScheduler.service');
 const statsScheduler = require('./src/services/statsScheduler.service');
 // Keep-alive middleware removed for Pro version
 
@@ -434,6 +437,8 @@ app.use('/api/dande', danDeRoutes);
 app.use('/api/articles', articleRoutes);
 app.use('/api/predictions', predictionRoutes);
 app.use('/api/xsmb', xsmbScraperRoutes);
+app.use('/api/xsmn', xsmnScraperRoutes);
+app.use('/api/xsmn-result', xsmnResultRoutes);
 app.use('/api/kqxs', resultMBRoutes);
 app.use('/api/kqxs', statsUpdateRoutes);
 app.use('/api/position-soicau', positionSoiCauRoutes);
@@ -612,6 +617,8 @@ const startServer = async () => {
 
         // Initialize XSMB Scheduler
         xsmbScheduler.init();
+        // Initialize XSMN Scheduler
+        xsmnScheduler.init();
         // Khởi động stats scheduler để tự động cập nhật thống kê
         statsScheduler.init();
 
@@ -619,6 +626,7 @@ const startServer = async () => {
         process.on('SIGTERM', async () => {
             console.log('SIGTERM signal received: closing HTTP server');
             xsmbScheduler.stop();
+            xsmnScheduler.stop();
             statsScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
@@ -630,6 +638,7 @@ const startServer = async () => {
         process.on('SIGINT', async () => {
             console.log('SIGINT signal received: closing HTTP server');
             xsmbScheduler.stop();
+            xsmnScheduler.stop();
             server.close(async () => {
                 console.log('HTTP server closed');
                 await database.disconnect();
