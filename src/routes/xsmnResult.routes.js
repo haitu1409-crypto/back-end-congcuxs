@@ -32,3 +32,4 @@ router.get('/xsmn/:dayOfWeek', xsmnResultController.apiLimiter, xsmnResultContro
 module.exports = router;
 
 
+
