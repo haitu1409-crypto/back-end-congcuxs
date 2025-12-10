@@ -7,14 +7,23 @@
 const { getIO } = require('./socket.service');
 const XSMN = require('../models/xsmn.models');
 
+// Helper: check cùng ngày (so sánh yyyy-mm-dd)
+const isSameDay = (d1, d2) => {
+    const a = new Date(d1);
+    const b = new Date(d2);
+    return a.getFullYear() === b.getFullYear() &&
+        a.getMonth() === b.getMonth() &&
+        a.getDate() === b.getDate();
+};
+
 class XSMNSocketService {
     constructor() {
         this.io = null;
         this.lotteryNamespace = null;
         this.connectedClients = new Set();
-        this.latestSnapshotByProvince = {}; // Cache theo từng tỉnh
+        this.latestSnapshotByProvince = {}; // Cache theo từng tỉnh (snapshot từ stream)
         
-        // 🚀 OPTIMIZATION: Cache latest result để giảm DB queries
+        // 🚀 OPTIMIZATION: Cache latest result để giảm DB queries (per province)
         this.latestResultCacheByProvince = {}; // Cache theo tỉnh
         this.cacheExpiryByProvince = {}; // Expiry theo tỉnh
         this.CACHE_TTL_MS = 5000; // Cache 5 giây
@@ -25,7 +34,8 @@ class XSMNSocketService {
         this.CONNECTION_WINDOW_MS = 60000; // 1 minute window
         
         // 🚀 OPTIMIZATION: Batch latest requests
-        this.pendingLatestRequests = new Set();
+        // Map socket -> specificTinh|null (null = all provinces)
+        this.pendingLatestRequests = new Map();
         this.latestRequestBatchTimeout = null;
         this.BATCH_DELAY_MS = 100;
         
@@ -122,74 +132,113 @@ class XSMNSocketService {
      * Gửi kết quả mới nhất cho client (tất cả tỉnh hoặc tỉnh cụ thể)
      */
     async sendLatestResults(socket, specificTinh = null) {
-        this.pendingLatestRequests.add(socket);
+        // Lưu yêu cầu (mỗi socket một giá trị specificTinh hoặc null)
+        this.pendingLatestRequests.set(socket, specificTinh || null);
         
         if (this.latestRequestBatchTimeout) {
             clearTimeout(this.latestRequestBatchTimeout);
         }
         
         this.latestRequestBatchTimeout = setTimeout(async () => {
-            await this.processBatchLatestRequests(specificTinh);
+            await this.processBatchLatestRequests();
         }, this.BATCH_DELAY_MS);
     }
     
     /**
      * Process batch latest requests
      */
-    async processBatchLatestRequests(specificTinh = null) {
+    async processBatchLatestRequests() {
         if (this.pendingLatestRequests.size === 0) return;
         
-        const sockets = Array.from(this.pendingLatestRequests);
+        const entries = Array.from(this.pendingLatestRequests.entries()); // [socket, specificTinh|null]
         this.pendingLatestRequests.clear();
         
-        const activeSockets = sockets.filter(socket => socket.connected);
-        if (activeSockets.length === 0) return;
-        
-        try {
-            const today = new Date();
-            today.setHours(0, 0, 0, 0);
+        const activeEntries = entries.filter(([socket]) => socket.connected);
+        if (activeEntries.length === 0) return;
 
-            // Lấy tất cả kết quả XSMN hôm nay
-            const results = await XSMN.find({
+        // Nếu có ít nhất một request all, chúng ta cần chuẩn bị payload cho tất cả tỉnh
+        const requestedProvinces = new Set(
+            activeEntries
+                .map(([, tinh]) => tinh)
+                .filter(Boolean) // chỉ các tỉnh cụ thể
+        );
+        const needAll = activeEntries.some(([, tinh]) => !tinh);
+
+        // Chuẩn bị dữ liệu nguồn: cache -> DB -> snapshot -> empty
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        let resultsByProvince = {};
+
+        try {
+            // Query DB nếu cần (khi needAll hoặc có province cụ thể chưa có cache/snapshot)
+            const dbResults = await XSMN.find({
                 drawDate: { $gte: today },
                 station: 'xsmn'
             }).sort({ createdAt: -1 }).lean();
 
-            // Nhóm theo tỉnh
-            const resultsByProvince = {};
-            results.forEach(result => {
+            dbResults.forEach(result => {
                 const tinh = result.tinh;
                 if (!resultsByProvince[tinh] || 
                     new Date(result.createdAt) > new Date(resultsByProvince[tinh].createdAt)) {
                     resultsByProvince[tinh] = result;
                 }
             });
-
-            // Format và gửi cho từng socket
-            activeSockets.forEach(socket => {
-                if (!socket.connected) return;
-
-                if (specificTinh) {
-                    // Gửi cho tỉnh cụ thể
-                    const result = resultsByProvince[specificTinh];
-                    if (result) {
-                        const payload = this.formatResultForClient(result);
-                        socket.emit('xsmn:latest', { [specificTinh]: payload });
-                    }
-                } else {
-                    // Gửi tất cả tỉnh
-                    const payload = {};
-                    Object.keys(resultsByProvince).forEach(tinh => {
-                        payload[tinh] = this.formatResultForClient(resultsByProvince[tinh]);
-                    });
-                    socket.emit('xsmn:latest-all', payload);
-                }
-            });
-
-            console.log(`📤 Sent latest results to ${activeSockets.length} clients (${specificTinh ? specificTinh : 'all provinces'})`);
         } catch (error) {
-            console.error('❌ Lỗi khi batch process latest requests:', error);
+            console.error('❌ Lỗi khi query DB latest XSMN:', error);
         }
+
+        // Helper: lấy payload cho một tỉnh với thứ tự ưu tiên: cache (TTL) -> DB -> snapshot -> empty
+        const getProvincePayload = (tinh, tentinhFromSnapshot = '') => {
+            const now = Date.now();
+            // 1) Cache TTL
+            if (this.latestResultCacheByProvince[tinh] && this.cacheExpiryByProvince[tinh] && now < this.cacheExpiryByProvince[tinh]) {
+                return this.latestResultCacheByProvince[tinh];
+            }
+            // 2) DB result
+            if (resultsByProvince[tinh]) {
+                const payload = this.formatResultForClient(resultsByProvince[tinh]);
+                this.latestResultCacheByProvince[tinh] = payload;
+                this.cacheExpiryByProvince[tinh] = now + this.CACHE_TTL_MS;
+                this.latestSnapshotByProvince[tinh] = payload; // đồng bộ snapshot
+                return payload;
+            }
+            // 3) Snapshot (được lưu khi emitPrizeUpdate/full-update)
+            if (this.latestSnapshotByProvince[tinh]) {
+                return this.latestSnapshotByProvince[tinh];
+            }
+            // 4) Empty result (giữ tinh/tentinh nếu biết)
+            return this.createEmptyResult(tentinhFromSnapshot || '', tinh || '');
+        };
+
+        // Danh sách tỉnh mà chúng ta sẽ phục vụ cho request all
+        const allKnownProvinces = new Set([
+            ...Object.keys(resultsByProvince),
+            ...Object.keys(this.latestSnapshotByProvince),
+            ...Object.keys(this.latestResultCacheByProvince),
+            ...requestedProvinces
+        ]);
+
+        // Gửi cho từng socket theo nhu cầu
+        activeEntries.forEach(([socket, tinh]) => {
+            if (!socket.connected) return;
+
+            if (tinh) {
+                const payload = getProvincePayload(tinh);
+                socket.emit('xsmn:latest', { [tinh]: payload });
+            } else {
+                const payloadAll = {};
+                allKnownProvinces.forEach(prov => {
+                    const payload = getProvincePayload(prov);
+                    // Chỉ gửi tỉnh có dữ liệu ngày hôm nay (hoặc empty result hôm nay)
+                    if (payload && payload.drawDate && isSameDay(payload.drawDate, today)) {
+                        payloadAll[prov] = payload;
+                    }
+                });
+                socket.emit('xsmn:latest-all', payloadAll);
+            }
+        });
+
+        console.log(`📤 Sent latest results to ${activeEntries.length} clients (${needAll ? 'all provinces' : `${requestedProvinces.size} provinces`})`);
     }
 
     /**
@@ -229,7 +278,8 @@ class XSMNSocketService {
         console.log(`📡 Đã emit prize update cho tỉnh ${tentinh} (${tinh}): ${prizeType} = ${prizeData}`);
 
         if (fullResult) {
-            this.latestSnapshotByProvince[tinh] = this.formatResultForClient(fullResult);
+            const formatted = this.formatResultForClient(fullResult);
+            this.latestSnapshotByProvince[tinh] = formatted;
             // Invalidate cache
             this.latestResultCacheByProvince[tinh] = null;
             this.cacheExpiryByProvince[tinh] = null;
