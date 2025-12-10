@@ -7,10 +7,12 @@ const Article = require('../models/article.model');
 const NodeCache = require('node-cache');
 const cloudinary = require('cloudinary').v2;
 
-// Cache configuration
+// Cache configuration - Optimized for performance
 const cache = new NodeCache({
     stdTTL: 300, // 5 minutes
-    checkperiod: 60 // 1 minute
+    checkperiod: 60, // 1 minute
+    useClones: false, // Better performance - don't clone cached objects
+    maxKeys: 500 // Limit cache size to prevent memory issues
 });
 
 // Configure Cloudinary
@@ -67,24 +69,22 @@ const getArticles = async (req, res) => {
 
         // Calculate pagination
         const skip = (page - 1) * limit;
-        const total = await Article.countDocuments(query);
-
-        // Build sort object
-        let sortObj = {};
-        if (sort === 'views') {
-            sortObj = { views: -1, publishedAt: -1 };
-        } else if (sort === 'trending') {
-            sortObj = { isTrending: -1, views: -1, publishedAt: -1 };
-        } else {
-            sortObj = { publishedAt: -1 };
-        }
-
-        const articles = await Article.find(query)
-            .select('-content') // Exclude full content for list view
-            .sort(sortObj)
-            .skip(skip)
-            .limit(limit)
-            .lean();
+        
+        // Optimize: Use parallel queries for better performance
+        const [total, articles] = await Promise.all([
+            Article.countDocuments(query),
+            Article.find(query)
+                .select('title excerpt slug category featuredImage publishedAt views author isFeatured isTrending') // Only select needed fields
+                .sort(sort === 'views' 
+                    ? { views: -1, publishedAt: -1 }
+                    : sort === 'trending'
+                    ? { isTrending: -1, views: -1, publishedAt: -1 }
+                    : { publishedAt: -1 }
+                )
+                .skip(skip)
+                .limit(limit)
+                .lean()
+        ]);
 
         const result = {
             articles,
@@ -139,10 +139,12 @@ const getArticleBySlug = async (req, res) => {
             });
         }
 
-        const article = await Article.findOne({
-            slug,
-            status: 'published'
-        }).lean();
+        // Optimize: Use findOneAndUpdate to get and update in one query
+        const article = await Article.findOneAndUpdate(
+            { slug, status: 'published' },
+            { $inc: { views: 1 } },
+            { new: true } // Return updated document
+        ).lean();
 
         if (!article) {
             return res.status(404).json({
@@ -150,15 +152,6 @@ const getArticleBySlug = async (req, res) => {
                 message: 'Không tìm thấy bài viết'
             });
         }
-
-        // Increment views (separate query)
-        await Article.findOneAndUpdate(
-            { slug, status: 'published' },
-            { $inc: { views: 1 } }
-        );
-
-        // Update article views for response
-        article.views = (article.views || 0) + 1;
 
         // Cache the article (already plain object from .lean())
         cache.set(cacheKey, article);
@@ -207,7 +200,7 @@ const getFeaturedArticles = async (req, res) => {
         }
 
         const articles = await Article.find(query)
-            .select('-content') // Exclude full content for list view
+            .select('title excerpt slug category featuredImage publishedAt views author isFeatured') // Only select needed fields
             .sort({ publishedAt: -1 }) // Latest first
             .limit(limit)
             .lean();
@@ -255,9 +248,9 @@ const getTrendingArticles = async (req, res) => {
         }
 
         const articles = await Article.findTrending(limit);
-        // Convert Mongoose documents to plain objects for caching
-        const articlesData = articles.map(article => article.toObject());
-        cache.set(cacheKey, articlesData);
+        // Articles are already plain objects from .lean() in the model
+        // No need to convert with toObject()
+        cache.set(cacheKey, articles);
 
         res.json({
             success: true,
@@ -295,17 +288,18 @@ const getArticlesByCategory = async (req, res) => {
         }
 
         const skip = (page - 1) * limit;
-        const total = await Article.countDocuments({
-            category,
-            status: 'published'
-        });
-
-        const articles = await Article.findByCategory(category)
-            .select('-content')
-            .sort({ publishedAt: -1 })
-            .skip(skip)
-            .limit(limit)
-            .lean();
+        const query = { category, status: 'published' };
+        
+        // Optimize: Use parallel queries
+        const [total, articles] = await Promise.all([
+            Article.countDocuments(query),
+            Article.findByCategory(category)
+                .select('title excerpt slug category featuredImage publishedAt views author isFeatured') // Only select needed fields
+                .sort({ publishedAt: -1 })
+                .skip(skip)
+                .limit(limit)
+                .lean()
+        ]);
 
         const result = {
             articles,
@@ -384,16 +378,17 @@ const searchArticles = async (req, res) => {
         }
 
         const skip = (page - 1) * limit;
-        const total = await Article.countDocuments({
-            $text: { $search: q },
-            status: 'published'
-        });
-
-        const articles = await Article.search(q)
-            .select('-content')
-            .skip(skip)
-            .limit(limit)
-            .lean();
+        const query = { $text: { $search: q }, status: 'published' };
+        
+        // Optimize: Use parallel queries
+        const [total, articles] = await Promise.all([
+            Article.countDocuments(query),
+            Article.search(q)
+                .select('title excerpt slug category featuredImage publishedAt views author isFeatured') // Only select needed fields
+                .skip(skip)
+                .limit(limit)
+                .lean()
+        ]);
 
         const result = {
             articles,
@@ -699,9 +694,22 @@ const createArticle = async (req, res) => {
         const savedArticle = await article.save();
         console.log('✅ Lưu bài viết thành công! ID:', savedArticle._id);
 
-        // Clear related caches
-        cache.flushAll();
-        console.log('🗑️ Đã xóa cache');
+        // Clear related caches - More efficient: only clear relevant caches
+        const keysToDelete = [
+            'categories',
+            `featured_articles_${3}_all`,
+            `featured_articles_${10}_all`,
+            `trending_articles_${10}`
+        ];
+        keysToDelete.forEach(key => cache.del(key));
+        // Also clear pattern-based keys (articles_*)
+        const allKeys = cache.keys();
+        allKeys.forEach(key => {
+            if (key.startsWith('articles_') || key.startsWith('featured_') || key.startsWith('trending_')) {
+                cache.del(key);
+            }
+        });
+        console.log('🗑️ Đã xóa cache liên quan');
 
         res.status(201).json({
             success: true,
@@ -755,9 +763,10 @@ const getCategories = async (req, res) => {
             });
         }
 
-        // Lấy thống kê category từ database (category cũ)
+        // Lấy thống kê category từ database (category cũ) - Optimized with projection
         const categoryStats = await Article.aggregate([
             { $match: { status: 'published' } },
+            { $project: { category: 1 } }, // Only project category field for better performance
             { $group: { _id: '$category', count: { $sum: 1 } } },
             { $sort: { count: -1 } }
         ]);
@@ -917,8 +926,20 @@ const deleteArticle = async (req, res) => {
             });
         }
 
-        // Clear caches
-        cache.flushAll();
+        // Clear related caches - More efficient: only clear relevant caches
+        const keysToDelete = [
+            'categories',
+            `featured_articles_${3}_all`,
+            `featured_articles_${10}_all`,
+            `trending_articles_${10}`
+        ];
+        keysToDelete.forEach(key => cache.del(key));
+        const allKeys = cache.keys();
+        allKeys.forEach(key => {
+            if (key.startsWith('articles_') || key.startsWith('featured_') || key.startsWith('trending_')) {
+                cache.del(key);
+            }
+        });
 
         res.json({
             success: true,

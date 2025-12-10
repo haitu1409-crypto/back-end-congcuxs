@@ -140,12 +140,15 @@ const articleSchema = new mongoose.Schema({
     toObject: { virtuals: true }
 });
 
-// Indexes for performance
+// Indexes for performance - Optimized compound indexes
 articleSchema.index({ title: 'text', content: 'text', excerpt: 'text' });
 articleSchema.index({ category: 1, status: 1, publishedAt: -1 });
 articleSchema.index({ tags: 1, status: 1 });
 articleSchema.index({ views: -1, publishedAt: -1 });
 articleSchema.index({ isFeatured: 1, status: 1, publishedAt: -1 });
+articleSchema.index({ isTrending: 1, status: 1, views: -1, publishedAt: -1 }); // For trending queries
+articleSchema.index({ status: 1, publishedAt: -1 }); // General query optimization
+articleSchema.index({ slug: 1, status: 1 }); // Optimize slug lookups
 
 // Virtual for URL
 articleSchema.virtual('url').get(function () {
@@ -219,14 +222,22 @@ articleSchema.statics.findTrending = function (limit = 10) {
     return this.find({
         status: 'published',
         isTrending: true
-    }).sort({ views: -1, publishedAt: -1 }).limit(limit);
+    })
+    .select('title excerpt slug category featuredImage publishedAt views author isTrending') // Only select needed fields
+    .sort({ views: -1, publishedAt: -1 })
+    .limit(limit)
+    .lean(); // Use lean() for better performance
 };
 
 articleSchema.statics.findFeatured = function (limit = 5) {
     return this.find({
         status: 'published',
         isFeatured: true
-    }).sort({ publishedAt: -1 }).limit(limit);
+    })
+    .select('title excerpt slug category featuredImage publishedAt views author isFeatured') // Only select needed fields
+    .sort({ publishedAt: -1 })
+    .limit(limit)
+    .lean(); // Use lean() for better performance
 };
 
 articleSchema.statics.search = function (query) {
@@ -235,7 +246,10 @@ articleSchema.statics.search = function (query) {
         status: 'published'
     }, {
         score: { $meta: 'textScore' }
-    }).sort({ score: { $meta: 'textScore' } });
+    })
+    .select('title excerpt slug category featuredImage publishedAt views author') // Only select needed fields
+    .sort({ score: { $meta: 'textScore' } })
+    .lean(); // Use lean() for better performance
 };
 
 // Instance methods
