@@ -27,12 +27,14 @@ const xsmnSchema = new mongoose.Schema({
     indexes: [
         { key: { drawDate: 1, station: 1, tentinh: 1 }, unique: true },
         { key: { drawDate: -1, station: 1 } },
+        { key: { drawDate: -1, station: 1, createdAt: -1 } }, // ✅ Composite index cho query tối ưu
         { key: { slug: 1 }, unique: true },
         { key: { tentinh: 1 } },
         { key: { dayOfWeek: 1 } },
         { key: { station: 1, tinh: 1 } },
         { key: { isComplete: 1 } },
         { key: { scrapedAt: -1 } },
+        { key: { createdAt: -1 } }, // ✅ Index cho createdAt để sort nhanh hơn
     ],
 });
 

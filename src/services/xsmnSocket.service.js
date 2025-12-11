@@ -26,12 +26,15 @@ class XSMNSocketService {
         // 🚀 OPTIMIZATION: Cache latest result để giảm DB queries (per province)
         this.latestResultCacheByProvince = {}; // Cache theo tỉnh
         this.cacheExpiryByProvince = {}; // Expiry theo tỉnh
-        this.CACHE_TTL_MS = 5000; // Cache 5 giây
+        this.CACHE_TTL_MS = 10000; // ✅ Tăng cache TTL lên 10 giây để giảm DB queries
         
         // 🚀 OPTIMIZATION: Rate limiting per IP
         this.connectionRateLimiter = new Map(); // IP -> timestamp[]
         this.MAX_CONNECTIONS_PER_IP = 5;
         this.CONNECTION_WINDOW_MS = 60000; // 1 minute window
+        
+        // 🚀 OPTIMIZATION: Max total connections để tránh quá tải
+        this.MAX_TOTAL_CONNECTIONS = 300; // Cho phép tối đa 300 connections đồng thời
         
         // 🚀 OPTIMIZATION: Batch latest requests
         // Map socket -> specificTinh|null (null = all provinces)
@@ -93,12 +96,20 @@ class XSMNSocketService {
             recentConnections.push(now);
             this.connectionRateLimiter.set(clientIP, recentConnections);
             
+            // ✅ OPTIMIZATION: Kiểm tra max total connections
+            if (this.connectedClients.size >= this.MAX_TOTAL_CONNECTIONS) {
+                console.warn(`⚠️ Max connections reached (${this.MAX_TOTAL_CONNECTIONS}), rejecting new connection from ${clientIP}`);
+                socket.emit('xsmn:error', { message: 'Server đang quá tải, vui lòng thử lại sau' });
+                socket.disconnect();
+                return;
+            }
+            
             this.connectedClients.add(socket.id);
             const station = 'xsmn';
             const roomName = `lottery:${station}`;
 
             socket.join(roomName);
-            console.log(`✅ Client ${socket.id} đã kết nối đến /lottery-xsmn namespace, tham gia room: ${roomName}`);
+            console.log(`✅ Client ${socket.id} đã kết nối đến /lottery-xsmn namespace, tham gia room: ${roomName} (Total: ${this.connectedClients.size}/${this.MAX_TOTAL_CONNECTIONS})`);
 
             // Gửi kết quả mới nhất cho tất cả tỉnh
             this.sendLatestResults(socket);
@@ -165,16 +176,21 @@ class XSMNSocketService {
         const needAll = activeEntries.some(([, tinh]) => !tinh);
 
         // Chuẩn bị dữ liệu nguồn: cache -> DB -> snapshot -> empty
+        // ✅ FIX: Tính today giống XSMB - đơn giản và hiệu quả
         const today = new Date();
         today.setHours(0, 0, 0, 0);
         let resultsByProvince = {};
 
         try {
-            // Query DB nếu cần (khi needAll hoặc có province cụ thể chưa có cache/snapshot)
+            // ✅ OPTIMIZATION: Query DB với limit và sort theo drawDate (đã có index)
+            // Limit 10 results để giảm memory và tăng tốc query
             const dbResults = await XSMN.find({
                 drawDate: { $gte: today },
                 station: 'xsmn'
-            }).sort({ createdAt: -1 }).lean();
+            })
+            .sort({ drawDate: -1, createdAt: -1 }) // Sort theo drawDate (có index) và createdAt
+            .limit(10) // ✅ Limit số lượng results
+            .lean();
 
             dbResults.forEach(result => {
                 const tinh = result.tinh;
@@ -223,14 +239,15 @@ class XSMNSocketService {
             if (!socket.connected) return;
 
             if (tinh) {
+                // ✅ FIX: Giống XSMB - gửi trực tiếp payload, tin tưởng query DB đã filter đúng
                 const payload = getProvincePayload(tinh);
                 socket.emit('xsmn:latest', { [tinh]: payload });
             } else {
+                // ✅ FIX: Giống XSMB - gửi tất cả payload, không check isSameDay
                 const payloadAll = {};
                 allKnownProvinces.forEach(prov => {
                     const payload = getProvincePayload(prov);
-                    // Chỉ gửi tỉnh có dữ liệu ngày hôm nay (hoặc empty result hôm nay)
-                    if (payload && payload.drawDate && isSameDay(payload.drawDate, today)) {
+                    if (payload) {
                         payloadAll[prov] = payload;
                     }
                 });
@@ -254,6 +271,7 @@ class XSMNSocketService {
         const roomName = `lottery:${station}`;
         const tinh = fullResult?.tinh || '';
         const tentinh = fullResult?.tentinh || '';
+        // ✅ FIX: Giống XSMB - tính today đơn giản
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
@@ -415,6 +433,7 @@ class XSMNSocketService {
      * Tạo empty result structure cho một tỉnh
      */
     createEmptyResult(tentinh = '', tinh = '') {
+        // ✅ FIX: Giống XSMB - tính today đơn giản
         const today = new Date();
         today.setHours(0, 0, 0, 0);
 
