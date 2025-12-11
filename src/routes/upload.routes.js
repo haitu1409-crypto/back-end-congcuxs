@@ -1,6 +1,6 @@
 /**
  * Upload Routes - API endpoints cho upload file
- * Tối ưu hiệu suất với multer và rate limiting
+ * Upload ảnh lên Cloudinary thay vì lưu local
  */
 
 const express = require('express');
@@ -8,6 +8,7 @@ const multer = require('multer');
 const rateLimit = require('express-rate-limit');
 const path = require('path');
 const fs = require('fs');
+const { uploadBuffer } = require('../utils/cloudinary');
 
 const router = express.Router();
 
@@ -21,7 +22,7 @@ const uploadLimiter = rateLimit({
     }
 });
 
-// Configure multer for file uploads
+// Configure multer for file uploads (temporary storage)
 const upload = multer({
     dest: 'uploads/',
     limits: {
@@ -42,13 +43,13 @@ const upload = multer({
     }
 });
 
-// Create uploads directory if it doesn't exist
+// Create uploads directory if it doesn't exist (for temporary storage)
 const uploadsDir = path.join(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
     fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// Upload endpoint
+// Upload endpoint - Upload to Cloudinary
 router.post('/upload', 
     uploadLimiter,
     upload.single('image'),
@@ -66,7 +67,8 @@ router.post('/upload',
         }
         next();
     },
-    (req, res) => {
+    async (req, res) => {
+        let tempFilePath = null;
         try {
             if (!req.file) {
                 return res.status(400).json({
@@ -75,30 +77,57 @@ router.post('/upload',
                 });
             }
 
-            // Get file extension from original name
-            const ext = path.extname(req.file.originalname);
-            const newFilename = req.file.filename + ext;
-            const newPath = path.join(uploadsDir, newFilename);
+            tempFilePath = req.file.path;
 
-            // Rename file to include extension
-            fs.renameSync(req.file.path, newPath);
+            // Read file buffer
+            const fileBuffer = fs.readFileSync(tempFilePath);
 
-            // Return file info
+            // Upload to Cloudinary
+            const cloudinaryResult = await uploadBuffer(fileBuffer, {
+                folder: 'articles/images',
+                transformation: [
+                    { width: 1200, height: 800, crop: 'limit', quality: 'auto' }
+                ],
+                resource_type: 'image'
+            });
+
+            // Clean up temporary file
+            if (tempFilePath && fs.existsSync(tempFilePath)) {
+                try {
+                    fs.unlinkSync(tempFilePath);
+                } catch (cleanupError) {
+                    console.error('Error cleaning up temp file:', cleanupError);
+                }
+            }
+
+            // Return file info with Cloudinary URL
             res.json({
                 success: true,
                 data: {
-                    filename: newFilename,
+                    filename: cloudinaryResult.original_filename || req.file.originalname,
                     originalname: req.file.originalname,
                     mimetype: req.file.mimetype,
                     size: req.file.size,
-                    url: `/uploads/${newFilename}`
+                    url: cloudinaryResult.secure_url,
+                    publicId: cloudinaryResult.public_id,
+                    alt: path.parse(req.file.originalname).name
                 }
             });
         } catch (error) {
             console.error('Upload error:', error);
+            
+            // Clean up temporary file on error
+            if (tempFilePath && fs.existsSync(tempFilePath)) {
+                try {
+                    fs.unlinkSync(tempFilePath);
+                } catch (cleanupError) {
+                    console.error('Error cleaning up temp file:', cleanupError);
+                }
+            }
+
             res.status(500).json({
                 success: false,
-                message: 'Lỗi server khi upload file'
+                message: 'Lỗi server khi upload file: ' + error.message
             });
         }
     }

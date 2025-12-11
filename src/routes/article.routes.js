@@ -9,11 +9,13 @@ const rateLimit = require('express-rate-limit');
 const {
     getArticles,
     getArticleBySlug,
+    getArticleById,
     getFeaturedArticles,
     getTrendingArticles,
     getArticlesByCategory,
     searchArticles,
     createArticle,
+    updateArticle,
     getCategories,
     likeArticle,
     shareArticle,
@@ -108,6 +110,33 @@ router.post('/create',
         next();
     },
     createArticle
+);
+
+// Get article by ID (must be before /:slug route)
+router.get('/id/:id', getArticleById);
+
+// Update article
+router.put('/:id',
+    createLimiter,
+    upload.fields([
+        { name: 'featuredImage', maxCount: 1 },
+        { name: 'images', maxCount: 9 }
+    ]),
+    (err, req, res, next) => {
+        if (err instanceof multer.MulterError) {
+            return res.status(400).json({
+                success: false,
+                message: 'Lỗi upload file: ' + err.message
+            });
+        } else if (err) {
+            return res.status(400).json({
+                success: false,
+                message: err.message
+            });
+        }
+        next();
+    },
+    updateArticle
 );
 
 router.delete('/:id', deleteArticle);

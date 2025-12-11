@@ -902,6 +902,376 @@ const shareArticle = async (req, res) => {
 };
 
 /**
+ * Get article by ID (Admin only)
+ */
+const getArticleById = async (req, res) => {
+    try {
+        const { id } = req.params;
+        const { password } = req.query;
+
+        // Check admin password
+        if (password !== ADMIN_PASSWORD) {
+            return res.status(401).json({
+                success: false,
+                message: 'Mật khẩu không đúng'
+            });
+        }
+
+        const article = await Article.findById(id).lean();
+
+        if (!article) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy bài viết'
+            });
+        }
+
+        res.json({
+            success: true,
+            data: article
+        });
+
+    } catch (error) {
+        console.error('Error getting article by ID:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi lấy bài viết',
+            error: error.message
+        });
+    }
+};
+
+/**
+ * Update article (Admin only)
+ */
+const updateArticle = async (req, res) => {
+    try {
+        console.log('📝 Bắt đầu cập nhật bài viết...');
+        console.log('📋 Request body:', req.body);
+        console.log('📁 Request files:', req.files);
+
+        const { id } = req.params;
+        const { password } = req.body;
+
+        // Check admin password
+        if (password !== ADMIN_PASSWORD) {
+            console.log('❌ Mật khẩu không đúng');
+            return res.status(401).json({
+                success: false,
+                message: 'Mật khẩu không đúng'
+            });
+        }
+
+        // Find existing article
+        const existingArticle = await Article.findById(id);
+        if (!existingArticle) {
+            return res.status(404).json({
+                success: false,
+                message: 'Không tìm thấy bài viết'
+            });
+        }
+
+        const {
+            title,
+            excerpt,
+            content,
+            category,
+            tags,
+            keywords,
+            metaDescription,
+            author,
+            isFeatured,
+            isTrending,
+            status
+        } = req.body;
+
+        // Validate required fields
+        if (!title || !excerpt || !content || !category) {
+            console.log('❌ Thiếu thông tin bắt buộc');
+            return res.status(400).json({
+                success: false,
+                message: 'Vui lòng điền đầy đủ thông tin bắt buộc (tiêu đề, tóm tắt, nội dung, danh mục)'
+            });
+        }
+
+        // Handle featured image - can be from frontend (already uploaded) or file upload
+        let featuredImage = existingArticle.featuredImage;
+
+        // Check if featuredImage is already provided in request body (from frontend upload)
+        if (req.body.featuredImage) {
+            try {
+                let frontendImage;
+
+                // Try to parse if it's a string, otherwise use directly
+                if (typeof req.body.featuredImage === 'string') {
+                    frontendImage = JSON.parse(req.body.featuredImage);
+                } else {
+                    frontendImage = req.body.featuredImage;
+                }
+
+                console.log('🔍 FeaturedImage data:', frontendImage);
+
+                if (frontendImage && frontendImage.url) {
+                    featuredImage = {
+                        url: frontendImage.url,
+                        alt: frontendImage.alt || title,
+                        originalname: frontendImage.originalname,
+                        publicId: frontendImage.publicId
+                    };
+                    console.log('✅ Sử dụng ảnh đại diện từ frontend:', frontendImage.url);
+                } else {
+                    console.log('⚠️ FeaturedImage không có URL:', frontendImage);
+                }
+            } catch (parseError) {
+                console.log('⚠️ Không thể parse featuredImage từ frontend:', parseError.message);
+            }
+        }
+
+        // If no featuredImage from frontend, try file upload to Cloudinary
+        if (!featuredImage && req.files && req.files.featuredImage) {
+            try {
+                console.log('📷 Bắt đầu upload ảnh đại diện...');
+                const file = req.files.featuredImage;
+                console.log('📁 File info:', {
+                    fieldname: file.fieldname,
+                    originalname: file.originalname,
+                    mimetype: file.mimetype,
+                    size: file.size,
+                    path: file.path
+                });
+
+                // Check if file exists
+                if (!file.path) {
+                    throw new Error('File path not found');
+                }
+
+                const result = await cloudinary.uploader.upload(
+                    file.path,
+                    {
+                        folder: 'articles/featured',
+                        transformation: [
+                            { width: 1200, height: 630, crop: 'fill', quality: 'auto' }
+                        ]
+                    }
+                );
+
+                featuredImage = {
+                    url: result.secure_url,
+                    publicId: result.public_id,
+                    alt: title
+                };
+                console.log('✅ Upload ảnh đại diện thành công:', result.secure_url);
+            } catch (uploadError) {
+                console.error('❌ Lỗi upload ảnh đại diện:', uploadError);
+                console.log('⚠️ Tiếp tục cập nhật bài viết không có ảnh đại diện');
+            }
+        }
+
+        // Handle additional images - can be from frontend (already uploaded) or file upload
+        let images = existingArticle.images || [];
+
+        // Check if images are already provided in request body (from frontend upload)
+        if (req.body.images) {
+            try {
+                const frontendImages = JSON.parse(req.body.images);
+                if (Array.isArray(frontendImages)) {
+                    images = frontendImages.filter(img => img && img.url);
+                    console.log('✅ Sử dụng images từ frontend:', images.length);
+                }
+            } catch (parseError) {
+                console.log('⚠️ Không thể parse images từ frontend:', parseError.message);
+            }
+        }
+
+        // If no images from frontend, try file upload to Cloudinary
+        if (images.length === 0 && req.files && req.files.images) {
+            try {
+                const imageFiles = Array.isArray(req.files.images)
+                    ? req.files.images
+                    : [req.files.images];
+
+                for (const imageFile of imageFiles) {
+                    if (imageFile.path) {
+                        const result = await cloudinary.uploader.upload(
+                            imageFile.path,
+                            {
+                                folder: 'articles/images',
+                                transformation: [
+                                    { width: 800, height: 600, crop: 'limit', quality: 'auto' }
+                                ]
+                            }
+                        );
+                        images.push({
+                            url: result.secure_url,
+                            publicId: result.public_id,
+                            alt: title
+                        });
+                    }
+                }
+                console.log('✅ Upload', images.length, 'ảnh bổ sung thành công');
+            } catch (uploadError) {
+                console.error('❌ Lỗi upload ảnh bổ sung:', uploadError);
+                console.log('⚠️ Tiếp tục cập nhật bài viết không có ảnh bổ sung');
+            }
+        }
+
+        console.log('💾 Bắt đầu cập nhật bài viết trong database...');
+
+        // Handle tags and keywords - can be string or array
+        const processTags = (tags) => {
+            if (!tags) return [];
+
+            // Try to parse if it's a JSON string
+            if (typeof tags === 'string') {
+                try {
+                    const parsed = JSON.parse(tags);
+                    if (Array.isArray(parsed)) {
+                        return parsed.filter(tag => tag && tag.trim());
+                    }
+                } catch (e) {
+                    // Not JSON, treat as comma-separated
+                    return tags.split(',').map(tag => tag.trim()).filter(tag => tag);
+                }
+            }
+
+            if (Array.isArray(tags)) {
+                return tags.filter(tag => tag && tag.trim());
+            }
+
+            return [];
+        };
+
+        const processKeywords = (keywords) => {
+            if (!keywords) return [];
+
+            // Try to parse if it's a JSON string
+            if (typeof keywords === 'string') {
+                try {
+                    const parsed = JSON.parse(keywords);
+                    if (Array.isArray(parsed)) {
+                        return parsed.filter(keyword => keyword && keyword.trim());
+                    }
+                } catch (e) {
+                    // Not JSON, treat as comma-separated
+                    return keywords.split(',').map(keyword => keyword.trim()).filter(keyword => keyword);
+                }
+            }
+
+            if (Array.isArray(keywords)) {
+                return keywords.filter(keyword => keyword && keyword.trim());
+            }
+
+            return [];
+        };
+
+        // Truncate metaDescription if it's too long
+        const processMetaDescription = (description) => {
+            if (!description) return '';
+            if (description.length <= 160) return description;
+            console.log(`⚠️ MetaDescription truncated from ${description.length} to 160 chars`);
+            return description.substring(0, 157) + '...';
+        };
+
+        // Truncate title if it's too long
+        const processTitle = (text) => {
+            if (!text) return '';
+            if (text.length <= 200) return text;
+            console.log(`⚠️ Title truncated from ${text.length} to 200 chars`);
+            return text.substring(0, 197) + '...';
+        };
+
+        // Truncate excerpt if it's too long
+        const processExcerpt = (text) => {
+            if (!text) return '';
+            if (text.length <= 500) return text;
+            console.log(`⚠️ Excerpt truncated from ${text.length} to 500 chars`);
+            return text.substring(0, 497) + '...';
+        };
+
+        // Update article data
+        existingArticle.title = processTitle(title);
+        existingArticle.excerpt = processExcerpt(excerpt);
+        existingArticle.content = content;
+        existingArticle.category = category;
+        existingArticle.tags = processTags(tags);
+        existingArticle.keywords = processKeywords(keywords);
+        existingArticle.metaDescription = processMetaDescription(metaDescription);
+        existingArticle.author = author || existingArticle.author || 'Admin';
+        existingArticle.images = images;
+        existingArticle.isFeatured = isFeatured === 'true' || isFeatured === true;
+        existingArticle.isTrending = isTrending === 'true' || isTrending === true;
+        
+        if (status) {
+            existingArticle.status = status;
+        }
+
+        // Only update featuredImage if it exists
+        if (featuredImage && featuredImage.url) {
+            existingArticle.featuredImage = featuredImage;
+        }
+
+        // Update slug if title changed
+        if (title !== existingArticle.title) {
+            // Slug will be auto-generated in pre-save hook
+        }
+
+        const updatedArticle = await existingArticle.save();
+        console.log('✅ Cập nhật bài viết thành công! ID:', updatedArticle._id);
+
+        // Clear related caches
+        const keysToDelete = [
+            'categories',
+            `featured_articles_${3}_all`,
+            `featured_articles_${10}_all`,
+            `trending_articles_${10}`,
+            `article_${updatedArticle.slug}`
+        ];
+        keysToDelete.forEach(key => cache.del(key));
+        const allKeys = cache.keys();
+        allKeys.forEach(key => {
+            if (key.startsWith('articles_') || key.startsWith('featured_') || key.startsWith('trending_')) {
+                cache.del(key);
+            }
+        });
+        console.log('🗑️ Đã xóa cache liên quan');
+
+        res.json({
+            success: true,
+            message: 'Cập nhật bài viết thành công',
+            data: updatedArticle
+        });
+
+    } catch (error) {
+        console.error('❌ Error updating article:', error);
+        console.error('❌ Error stack:', error.stack);
+
+        // Clean up uploaded files on error
+        if (req.files) {
+            const fs = require('fs');
+            Object.values(req.files).forEach(fileArray => {
+                const files = Array.isArray(fileArray) ? fileArray : [fileArray];
+                files.forEach(file => {
+                    if (file.path && fs.existsSync(file.path)) {
+                        try {
+                            fs.unlinkSync(file.path);
+                            console.log('🗑️ Cleaned up file:', file.path);
+                        } catch (cleanupError) {
+                            console.error('❌ Error cleaning up file:', cleanupError);
+                        }
+                    }
+                });
+            });
+        }
+
+        res.status(500).json({
+            success: false,
+            message: 'Lỗi khi cập nhật bài viết: ' + error.message,
+            error: process.env.NODE_ENV === 'development' ? error.stack : undefined
+        });
+    }
+};
+
+/**
  * Delete article (Admin only)
  */
 const deleteArticle = async (req, res) => {
@@ -959,11 +1329,13 @@ const deleteArticle = async (req, res) => {
 module.exports = {
     getArticles,
     getArticleBySlug,
+    getArticleById,
     getFeaturedArticles,
     getTrendingArticles,
     getArticlesByCategory,
     searchArticles,
     createArticle,
+    updateArticle,
     getCategories,
     likeArticle,
     shareArticle,
