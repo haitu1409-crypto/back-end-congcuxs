@@ -265,7 +265,7 @@ function isAdmin(userId) {
     const adminIds = process.env.TELEGRAM_ADMIN_ID;
     if (!adminIds) return false;
     
-    // Parse danh sách admin IDs (có thể là "8551427685, 6570193875" hoặc "8551427685,6570193875")
+    // Parse danh sách admin IDs (có thể là "8269548447, 6570193875" hoặc "8269548447,6570193875")
     const adminIdList = adminIds
         .split(',')
         .map(id => id.trim())
@@ -275,14 +275,14 @@ function isAdmin(userId) {
 }
 
 /**
- * Kiểm tra user có phải admin đặc biệt không (ID: 8551427685)
+ * Kiểm tra user có phải admin đặc biệt không (ID: 8269548447)
  * Admin đặc biệt được phép gửi bất kỳ số lượng số nào trong tin nhắn thường
  * @param {string|number} userId - User ID cần kiểm tra
  * @returns {boolean} - true nếu là admin đặc biệt, false nếu không
  */
 function isSpecialAdmin(userId) {
     if (!userId) return false;
-    return String(userId) === '8551427685';
+    return String(userId) === '8269548447';
 }
 
 /**
@@ -319,7 +319,7 @@ async function checkAndDeleteNumberSpamMessage(ctx) {
     }
     const uniqueCount = uniqueNumbers.size;
 
-    // ✅ KIỂM TRA ADMIN ĐẶC BIỆT TRƯỚC - ID 8551427685 được phép gửi bất kỳ số lượng nào
+    // ✅ KIỂM TRA ADMIN ĐẶC BIỆT TRƯỚC - ID 8269548447 được phép gửi bất kỳ số lượng nào
     const userId = ctx.from?.id;
     if (userId && isSpecialAdmin(userId)) {
         // Admin đặc biệt được phép gửi bất kỳ số lượng số nào trong tin nhắn thông thường
@@ -525,9 +525,9 @@ function isExemptedFromLinkCheck(ctx) {
         return true;
     }
 
-    // CHỈ miễn trừ admin với ID cụ thể: 8551427685
+    // CHỈ miễn trừ admin với ID cụ thể: 8269548447
     const userId = ctx.from?.id;
-    if (userId && String(userId) === '8551427685') {
+    if (userId && String(userId) === '8269548447') {
         return true;
     }
 

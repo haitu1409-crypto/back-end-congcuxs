@@ -66,7 +66,7 @@ function isAdmin(userId) {
     const adminIds = process.env.TELEGRAM_ADMIN_ID;
     if (!adminIds) return false;
     
-    // Parse danh sách admin IDs (có thể là "8551427685, 6570193875" hoặc "8551427685,6570193875")
+    // Parse danh sách admin IDs (có thể là "8269548447, 6570193875" hoặc "8269548447,6570193875")
     const adminIdList = adminIds
         .split(',')
         .map(id => id.trim())
