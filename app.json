@@ -2,7 +2,7 @@
   "name": "dande-backend-api",
   "description": "Backend API for Dàn Đề Wukong - Xổ Số Tools",
   "repository": "https://github.com/haitu1409-crypto/back-end-congcuxs",
-  "logo": "https://taodandewukong.pro/logo.png",
+  "logo": "https://ketquamn.com/logo.png",
   "keywords": ["xổ số", "dàn đề", "lô đề", "api", "nodejs", "express", "mongodb"],
   "image": "heroku/nodejs",
   "stack": "heroku-18",

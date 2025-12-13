@@ -52,8 +52,8 @@ app.use(helmet({
 const allowedOrigins = process.env.FRONTEND_URL
     ? process.env.FRONTEND_URL.split(',').map(origin => origin.trim())
     : [
-        'https://www.taodandewukong.pro',
-        'https://taodandewukong.pro',
+        'https://www.ketquamn.com',
+        'https://ketquamn.com',
         'http://localhost:3000',
         'http://localhost:3001',
         'http://localhost:3002',
@@ -83,8 +83,8 @@ app.use(cors({
             return callback(null, true);
         }
 
-        // Check for subdomain matches (e.g., www.taodandewukong.pro matches taodandewukong.pro)
-        // Also allow cross-subdomain requests (e.g., www.taodandewukong.pro can call api1.taodandewukong.pro)
+        // Check for subdomain matches (e.g., www.ketquamn.com matches ketquamn.com)
+        // Also allow cross-subdomain requests (e.g., www.ketquamn.com can call api1.ketquamn.com)
         const isSubdomainMatch = allowedOrigins.some(allowedOrigin => {
             if (!allowedOrigin || allowedOrigin === '*') return false;
 
@@ -97,7 +97,7 @@ app.use(cors({
                 return true;
             }
 
-            // Extract root domain (last 2 parts: e.g., "taodandewukong.pro")
+            // Extract root domain (last 2 parts: e.g., "ketquamn.com")
             const requestParts = requestDomain.split('.');
             const domainParts = domain.split('.');
 
@@ -105,8 +105,8 @@ app.use(cors({
                 const requestRoot = requestParts.slice(-2).join('.');
                 const domainRoot = domainParts.slice(-2).join('.');
 
-                // Allow if same root domain (e.g., both end with .taodandewukong.pro)
-                // This allows www.taodandewukong.pro, api1.taodandewukong.pro, etc. to work together
+                // Allow if same root domain (e.g., both end with .ketquamn.com)
+                // This allows www.ketquamn.com, api1.ketquamn.com, etc. to work together
                 if (requestRoot === domainRoot) {
                     console.log('✅ Same root domain match:', requestRoot, '===', domainRoot);
                     console.log('   Request domain:', requestDomain);
@@ -115,13 +115,13 @@ app.use(cors({
                 }
             }
 
-            // Subdomain match (e.g., www.taodandewukong.pro matches taodandewukong.pro)
+            // Subdomain match (e.g., www.ketquamn.com matches ketquamn.com)
             if (requestDomain.endsWith('.' + domain)) {
                 console.log('✅ Subdomain match (request ends with domain):', requestDomain, 'ends with', domain);
                 return true;
             }
 
-            // Reverse subdomain match (e.g., taodandewukong.pro matches www.taodandewukong.pro)
+            // Reverse subdomain match (e.g., ketquamn.com matches www.ketquamn.com)
             if (domain.endsWith('.' + requestDomain)) {
                 console.log('✅ Reverse subdomain match (domain ends with request):', domain, 'ends with', requestDomain);
                 return true;

@@ -56,7 +56,7 @@ class TelegramLotterySocketClient {
                     // Trong production, nếu không detect được, log warning và không kết nối
                     console.warn('[TelegramLotterySocket] ⚠️ Production mode nhưng không có SOCKET_URL/API_URL');
                     console.warn('[TelegramLotterySocket] ⚠️ Vui lòng set SOCKET_URL hoặc API_URL trong environment variables');
-                    console.warn('[TelegramLotterySocket] ⚠️ Ví dụ: SOCKET_URL=https://api1.taodandewukong.pro');
+                    console.warn('[TelegramLotterySocket] ⚠️ Ví dụ: SOCKET_URL=https://api1.ketquamn.com');
                     console.warn('[TelegramLotterySocket] ⚠️ Không thể kết nối socket trong production mà không có URL hợp lệ');
                     // Không kết nối nếu không có URL hợp lệ trong production
                     return null;
