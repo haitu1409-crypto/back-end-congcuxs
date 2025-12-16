@@ -850,6 +850,17 @@ function getPredictionDisplayName(pred) {
     return pred.displayName || pred.username || pred.userId || 'Ẩn danh';
 }
 
+// Hàm escape HTML để tránh lỗi parse entities của Telegram
+function escapeHtml(text) {
+    if (!text) return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function formatUserMention(record) {
     if (!record) return 'Ẩn danh';
     const rawUsername = record.username || record.userUsername;
@@ -858,7 +869,12 @@ function formatUserMention(record) {
     const fallbackName = displayName || (sanitizedUsername ? `@${sanitizedUsername}` : (record.userId ? `user_${record.userId}` : 'Ẩn danh'));
 
     if (record.userId) {
-        const safeName = fallbackName;
+        // Escape HTML để tránh lỗi parse entities
+        const safeName = escapeHtml(fallbackName);
+        // Đảm bảo safeName không rỗng
+        if (!safeName || !safeName.trim()) {
+            return `user_${record.userId}`;
+        }
         return `<a href="tg://user?id=${record.userId}">${safeName}</a>`;
     }
 
@@ -866,7 +882,7 @@ function formatUserMention(record) {
         return `@${sanitizedUsername}`;
     }
 
-    return fallbackName || 'Ẩn danh';
+    return escapeHtml(fallbackName) || 'Ẩn danh';
 }
 
 function buildListMessage(predictions, normalizedDate) {
@@ -904,7 +920,7 @@ function buildListMessage(predictions, normalizedDate) {
             
             // Thêm lệnh để xem chi tiết
             if (identifier) {
-                message += ` : <code>soicau @${identifier}</code>`;
+                message += ` : <code>soicau @${escapeHtml(identifier)}</code>`;
             }
             
             message += `\n`;
@@ -935,7 +951,7 @@ function buildListMessage(predictions, normalizedDate) {
         } else {
             // Thêm lệnh để xem chi tiết nếu không có groups
             if (identifier) {
-                message += ` : <code>soicau @${identifier}</code>`;
+                message += ` : <code>soicau @${escapeHtml(identifier)}</code>`;
             }
             message += `\n`;
         }
@@ -957,7 +973,7 @@ async function buildResultMessage(summary, normalizedDate, chatId, oldScoresMap 
     }
 
     if (summary.specialTarget) {
-        message += `\n<b>🎯 2 số cuối giải ĐB:</b> <code>${summary.specialTarget}</code>\n`;
+        message += `\n<b>🎯 2 số cuối giải ĐB:</b> <code>${escapeHtml(String(summary.specialTarget))}</code>\n`;
     }
 
     if (!summary.hits.length) {
@@ -977,7 +993,7 @@ async function buildResultMessage(summary, normalizedDate, chatId, oldScoresMap 
         // Thêm lệnh để xem chi tiết
         const username = hit.username || (hit.userUsername ? hit.userUsername.replace(/^@/, '') : null);
         if (username) {
-            message += `\n   <code>soicau @${username}</code>`;
+            message += `\n   <code>soicau @${escapeHtml(username)}</code>`;
         }
         
         // Thêm newline sau mỗi user (trừ user cuối) để ngăn cách nhưng không có dòng trống
@@ -2128,7 +2144,7 @@ function createPredictionHandlers({ xsmbModel }) {
                 const identifier = buildUserCommandIdentifier(user);
                 message += `<b>${index + 1}.</b> ${mention}\n`;
                 if (identifier) {
-                    message += `   <code>soicau @${identifier}</code>\n`;
+                    message += `   <code>soicau @${escapeHtml(identifier)}</code>\n`;
                 }
                 message += `\n`;
             });
@@ -2292,7 +2308,7 @@ function createPredictionHandlers({ xsmbModel }) {
             // Hiển thị kết quả nếu có
             if (evaluationResult) {
                 message += `\n<b>🎯 KẾT QUẢ:</b>\n`;
-                message += `<b>2 số cuối giải ĐB:</b> <code>${evaluationResult.specialTarget}</code>\n`;
+                message += `<b>2 số cuối giải ĐB:</b> <code>${escapeHtml(String(evaluationResult.specialTarget))}</code>\n`;
 
                 if (evaluationResult.status === 'hit') {
                     message += `\n<b>🎉 TRÚNG SỐ!</b>\n`;
