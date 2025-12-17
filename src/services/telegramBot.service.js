@@ -61,8 +61,8 @@ const autoScheduleChatsEnv = parseChatList(process.env.TELEGRAM_AUTO_SCHEDULE_CH
 const autoScheduleChats = autoScheduleChatsEnv.length ? autoScheduleChatsEnv : allowedChats;
 
 // ✅ Danh sách chat nhận tường thuật xổ số trực tiếp (live result)
-// Chỉ gửi vào supergroup chat cụ thể: -1003225717094
-const liveResultChats = ['-1003225717094'];
+// Chỉ gửi vào supergroup chat cụ thể: -1003402002690
+const liveResultChats = ['-1003402002690'];
 const SUPPORTED_SCHEDULE_TYPES = ['xsmb', 'prediction_result', 'prediction_list', 'prediction_signup_close', 'prediction_stats', 'inactive_reminder', 'chuc_mung'];
 const scheduledJobs = new Map();
 
