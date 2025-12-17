@@ -142,7 +142,7 @@ class XSMNScraperService {
         let successCount = 0;
         let errorCount = 0;
         const startTime = Date.now();
-        const pollIntervalMs = isTestMode ? 1000 : 1000;
+        const pollIntervalMs = isTestMode ? 1000 : 2000; // ✅ Giảm tần suất cào từ 1s xuống 2s
         const liveWindowMinutes = isTestMode ? 1 : 30; // Khung thời gian cào (16h10-16h40)
         const maxDuration = liveWindowMinutes * 60 * 1000;
         const maxIterations = Math.ceil(maxDuration / pollIntervalMs);
@@ -451,8 +451,7 @@ class XSMNScraperService {
 
                         if (isComplete) {
                             console.log(`✅ Dữ liệu ngày ${date} cho tỉnh ${tentinh} đã đầy đủ.`);
-                            await this.saveToMongoDB(formattedResult);
-                            // Emit complete result
+                            // ✅ CHỈ EMIT SOCKET, KHÔNG LƯU DB (sẽ lưu khi tất cả tỉnh complete)
                             await xsmnSocketService.emitFullResultUpdate(formattedResult);
                         } else {
                             allProvincesComplete = false;
@@ -477,13 +476,19 @@ class XSMNScraperService {
                 }
             }
 
-            // Lưu kết quả cuối cùng cho tất cả tỉnh (ngay cả khi không complete)
-            for (const [tentinh, lastResult] of Object.entries(lastResultsByProvince)) {
-                if (lastResult) {
-                    await this.saveToMongoDB(lastResult);
-                    // Emit final update
-                    await xsmnSocketService.emitFullResultUpdate(lastResult);
+            // ✅ CHỈ LƯU DB KHI TẤT CẢ TỈNH ĐÃ HOÀN THÀNH
+            if (allProvincesComplete) {
+                const totalProvinces = Object.keys(lastResultsByProvince).length;
+                console.log(`💾 Lưu tất cả ${totalProvinces} tỉnh vào database...`);
+                for (const [tentinh, lastResult] of Object.entries(lastResultsByProvince)) {
+                    if (lastResult) {
+                        await this.saveToMongoDB(lastResult);
+                    }
                 }
+                console.log(`✅ Đã lưu tất cả ${totalProvinces} tỉnh vào database.`);
+            } else {
+                const totalProvinces = Object.keys(lastResultsByProvince).length;
+                console.log(`⚠️ Chưa lưu vào database: ${totalProvinces} tỉnh nhưng chưa đủ tất cả tỉnh hoàn thành`);
             }
 
             const totalDuration = (Date.now() - startTime) / 1000;
