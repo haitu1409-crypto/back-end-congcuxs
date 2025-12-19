@@ -36,7 +36,10 @@ const parseInput2D = (input) => {
 
     nums.forEach(num => {
         const strNum = num.toString();
-        if (strNum.length === 2 && !isNaN(parseInt(strNum))) {
+        if (strNum.length === 1 && !isNaN(parseInt(strNum))) {
+            // ✅ FIX: Xử lý số 1 chữ số - thêm 0 vào trước (1 → 01)
+            pairs.push(strNum.padStart(2, '0'));
+        } else if (strNum.length === 2 && !isNaN(parseInt(strNum))) {
             // Nếu là số 2 chữ số
             pairs.push(strNum.padStart(2, '0'));
         } else if (strNum.length >= 3 && !isNaN(parseInt(strNum))) {

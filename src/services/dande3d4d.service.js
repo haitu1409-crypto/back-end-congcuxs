@@ -40,8 +40,12 @@ const parseInputND = (input, digitCount = 3) => {
         if (!/^\d+$/.test(num)) {
             errors.push(`"${num}" không phải là số hợp lệ`);
         } else if (num.length < digitCount) {
-            errors.push(`"${num}" quá ngắn (cần ít nhất ${digitCount} chữ số)`);
-        } else if (num.length >= digitCount) {
+            // ✅ FIX: Xử lý số ngắn hơn digitCount - thêm số 0 vào trước
+            // Ví dụ: 3D: 1 → 001, 12 → 012; 4D: 1 → 0001, 12 → 0012, 123 → 0123
+            numbers.push(num.padStart(digitCount, '0'));
+        } else if (num.length === digitCount) {
+            numbers.push(num);
+        } else if (num.length > digitCount) {
             // Tách thành các số có digitCount chữ số
             for (let i = 0; i <= num.length - digitCount; i++) {
                 const extracted = num.slice(i, i + digitCount);
@@ -50,8 +54,9 @@ const parseInputND = (input, digitCount = 3) => {
         }
     });
 
-    if (errors.length > 0 && numbers.length === 0) {
-        return { numbers: [], error: errors.join('; ') };
+    // ✅ FIX: Chỉ trả về error nếu không có số hợp lệ nào và có lỗi thực sự (không phải số ngắn)
+    if (numbers.length === 0 && errors.length > 0 && errors.some(err => !err.includes('quá ngắn'))) {
+        return { numbers: [], error: errors.filter(err => !err.includes('quá ngắn')).join('; ') };
     }
 
     return { numbers, error: null };
