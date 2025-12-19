@@ -61,35 +61,52 @@ const allowedOrigins = process.env.FRONTEND_URL
         'http://localhost:3004'
     ];
 
+// Normalize origins (remove trailing slashes and ensure consistent format)
+const normalizeOrigin = (origin) => {
+    if (!origin) return null;
+    return origin.replace(/\/+$/, '').toLowerCase();
+};
+
+const normalizedAllowedOrigins = allowedOrigins.map(normalizeOrigin).filter(Boolean);
+
 // Add wildcard support for development
 if (process.env.NODE_ENV === 'development' || !process.env.NODE_ENV) {
     allowedOrigins.push('*');
 }
 
 console.log('🌐 Allowed CORS Origins:', allowedOrigins);
+console.log('🌐 Normalized Allowed Origins:', normalizedAllowedOrigins);
 
 app.use(cors({
     origin: (origin, callback) => {
         // Allow requests with no origin (like mobile apps or curl requests)
         if (!origin) return callback(null, true);
 
+        const normalizedOrigin = normalizeOrigin(origin);
         console.log('🔍 Request Origin:', origin);
-        console.log('✅ Checking against allowed origins:', allowedOrigins);
+        console.log('🔍 Normalized Origin:', normalizedOrigin);
+        console.log('✅ Checking against allowed origins:', normalizedAllowedOrigins);
         console.log('🔧 Environment:', process.env.NODE_ENV);
 
         // Check exact match or wildcard
+        if (normalizedAllowedOrigins.includes('*') || normalizedAllowedOrigins.includes(normalizedOrigin)) {
+            console.log('✅ CORS allowed for (exact match):', origin);
+            return callback(null, true);
+        }
+
+        // Also check original allowedOrigins for backward compatibility
         if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
-            console.log('✅ CORS allowed for:', origin);
+            console.log('✅ CORS allowed for (original list):', origin);
             return callback(null, true);
         }
 
         // Check for subdomain matches (e.g., www.ketquamn.com matches ketquamn.com)
         // Also allow cross-subdomain requests (e.g., www.ketquamn.com can call api1.ketquamn.com)
-        const isSubdomainMatch = allowedOrigins.some(allowedOrigin => {
+        const isSubdomainMatch = normalizedAllowedOrigins.some(allowedOrigin => {
             if (!allowedOrigin || allowedOrigin === '*') return false;
 
-            const domain = allowedOrigin.replace(/^https?:\/\//, '').toLowerCase();
-            const requestDomain = origin.replace(/^https?:\/\//, '').toLowerCase();
+            const domain = allowedOrigin.replace(/^https?:\/\//, '');
+            const requestDomain = normalizedOrigin.replace(/^https?:\/\//, '');
 
             // Exact match
             if (requestDomain === domain) {
@@ -136,8 +153,9 @@ app.use(cors({
         }
 
         console.log('❌ CORS blocked for:', origin);
-        console.log('🔍 Debug - Request domain parts:', origin.replace(/^https?:\/\//, '').split('.'));
-        console.log('🔍 Debug - Allowed origins domain parts:', allowedOrigins.map(o => o.replace(/^https?:\/\//, '').split('.')));
+        console.log('🔍 Debug - Normalized origin:', normalizedOrigin);
+        console.log('🔍 Debug - Request domain parts:', normalizedOrigin.replace(/^https?:\/\//, '').split('.'));
+        console.log('🔍 Debug - Allowed origins domain parts:', normalizedAllowedOrigins.map(o => o.replace(/^https?:\/\//, '').split('.')));
         return callback(new Error(`Not allowed by CORS: ${origin}`));
     },
     credentials: true,
@@ -160,21 +178,49 @@ app.use(cors({
     maxAge: 86400 // Cache preflight for 24 hours
 }));
 
-// Additional CORS headers for preflight requests
-app.options('*', cors());
+// Additional CORS headers for preflight requests - Handle before other middleware
+app.options('*', (req, res) => {
+    const origin = req.headers.origin;
+    const normalizedOrigin = normalizeOrigin(origin);
+    
+    // Check if origin is allowed
+    const isAllowed = !origin || 
+        normalizedAllowedOrigins.includes('*') ||
+        normalizedAllowedOrigins.includes(normalizedOrigin) ||
+        allowedOrigins.includes('*') ||
+        allowedOrigins.includes(origin);
+    
+    if (isAllowed && origin) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+        res.setHeader('Access-Control-Allow-Credentials', 'true');
+    } else if (isAllowed) {
+        res.setHeader('Access-Control-Allow-Origin', '*');
+    }
+    
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Access-Control-Request-Method, Access-Control-Request-Headers, x-user-id');
+    res.setHeader('Access-Control-Max-Age', '86400');
+    
+    console.log('🔄 OPTIONS preflight request from:', origin, isAllowed ? '✅ ALLOWED' : '❌ BLOCKED');
+    
+    res.status(204).end();
+});
 
 // Manual CORS headers for all responses (backup)
 app.use((req, res, next) => {
     const origin = req.headers.origin;
+    const normalizedOrigin = normalizeOrigin(origin);
 
     // Check if origin is allowed (same logic as CORS middleware)
-    const isAllowedOrigin = allowedOrigins.includes('*') ||
+    const isAllowedOrigin = normalizedAllowedOrigins.includes('*') ||
+        normalizedAllowedOrigins.includes(normalizedOrigin) ||
+        allowedOrigins.includes('*') ||
         allowedOrigins.includes(origin) ||
-        (origin && allowedOrigins.some(allowedOrigin => {
+        (normalizedOrigin && normalizedAllowedOrigins.some(allowedOrigin => {
             if (!allowedOrigin || allowedOrigin === '*') return false;
 
-            const domain = allowedOrigin.replace(/^https?:\/\//, '').toLowerCase();
-            const requestDomain = origin.replace(/^https?:\/\//, '').toLowerCase();
+            const domain = allowedOrigin.replace(/^https?:\/\//, '');
+            const requestDomain = normalizedOrigin.replace(/^https?:\/\//, '');
 
             // Exact match
             if (requestDomain === domain) return true;
@@ -463,10 +509,15 @@ app.use('/api/admin', adminRoutes);
 app.use('/uploads', (req, res, next) => {
     // Set CORS headers for static files
     const origin = req.headers.origin;
+    const normalizedOrigin = normalizeOrigin(origin);
+    
     if (!origin) {
         // Allow requests with no origin (direct access)
         res.setHeader('Access-Control-Allow-Origin', '*');
-    } else if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+    } else if (normalizedAllowedOrigins.includes('*') || 
+               normalizedAllowedOrigins.includes(normalizedOrigin) ||
+               allowedOrigins.includes('*') || 
+               allowedOrigins.includes(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
     }

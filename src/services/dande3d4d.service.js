@@ -77,17 +77,22 @@ const calculateFrequency = (numbers) => {
 /**
  * Phân loại số theo levels dựa trên tần suất
  * @param {Object} frequency - Object chứa tần suất các số
+ * @param {number} digitCount - Số chữ số (3 cho 3D, 4 cho 4D)
  * @returns {Object} - Levels object
  */
-const createLevels = (frequency) => {
+const createLevels = (frequency, digitCount = 3) => {
+    const maxNumber = Math.pow(10, digitCount) - 1; // 999 cho 3D, 9999 cho 4D
     const levels = {};
 
-    Object.entries(frequency).forEach(([num, freq]) => {
+    // Tạo tất cả số từ 000-999 (3D) hoặc 0000-9999 (4D)
+    for (let i = 0; i <= maxNumber; i++) {
+        const num = i.toString().padStart(digitCount, '0');
+        const freq = frequency[num] || 0;
         if (!levels[freq]) {
             levels[freq] = [];
         }
         levels[freq].push(num);
-    });
+    }
 
     // Sắp xếp số trong mỗi level
     Object.keys(levels).forEach(level => {
@@ -114,7 +119,7 @@ const generate3D = (input) => {
     }
 
     const { frequency, total } = calculateFrequency(numbers);
-    const levels = createLevels(frequency);
+    const levels = createLevels(frequency, 3);
 
     return {
         levels,
@@ -147,7 +152,7 @@ const generate4D = (input) => {
     }
 
     const { frequency, total } = calculateFrequency(numbers);
-    const levels = createLevels(frequency);
+    const levels = createLevels(frequency, 4);
 
     return {
         levels,
