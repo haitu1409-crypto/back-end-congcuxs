@@ -141,8 +141,35 @@ function findSetsContainingNumber(number) {
     return containingSets;
 }
 
+/**
+ * Lấy tất cả số từ các bộ số đặc biệt đã chọn (kết hợp và loại bỏ trùng lặp)
+ * @param {string[]} setIds - Mảng các setId (00-99) đã chọn
+ * @returns {string[]} - Mảng các số từ tất cả các bộ đã chọn (không trùng lặp)
+ */
+function getCombinedSpecialSetNumbers(setIds) {
+    if (!Array.isArray(setIds) || setIds.length === 0) {
+        return [];
+    }
+    
+    const combinedNumbers = new Set();
+    
+    setIds.forEach(setId => {
+        const setIdStr = String(setId).padStart(2, '0');
+        const setNumbers = SPECIAL_SETS.get(setIdStr);
+        
+        if (setNumbers && Array.isArray(setNumbers)) {
+            setNumbers.forEach(num => {
+                combinedNumbers.add(num);
+            });
+        }
+    });
+    
+    return Array.from(combinedNumbers);
+}
+
 module.exports = {
     findSetsContainingNumber,
+    getCombinedSpecialSetNumbers,
     SPECIAL_SETS,
     specialSetsData
 };
