@@ -790,7 +790,7 @@ const getCategories = async (req, res) => {
         });
 
         // Trả về theo thứ tự mong muốn (đồng bộ với front-end)
-        const order = ['lien-minh-huyen-thoai', 'lien-quan-mobile', 'dau-truong-chan-ly-tft', 'trending'];
+        const order = ['kinh-nghiem', 'soi-cau-lo-to', 'soi-cau-dac-biet', 'dan-de-bat-tu'];
         const result = order
             .map(key => groupedCategories[key])
             .filter(cat => cat) // Loại bỏ undefined
@@ -802,10 +802,10 @@ const getCategories = async (req, res) => {
         // Nếu không có category nào, trả về category mới với count = 0
         if (result.length === 0) {
             const newCategoryLabels = {
-                'lien-minh-huyen-thoai': 'Liên Minh Huyền Thoại',
-                'lien-quan-mobile': 'Liên Quân Mobile',
-                'dau-truong-chan-ly-tft': 'Đấu Trường Chân Lý TFT',
-                'trending': 'Trending'
+                'kinh-nghiem': 'Kinh Nghiệm',
+                'soi-cau-lo-to': 'Soi Cầu Lôtô',
+                'soi-cau-dac-biet': 'Soi Cầu Đặc Biệt',
+                'dan-de-bat-tu': 'Dàn Đề Bất Tử'
             };
             
             result.push(...order.map(key => ({

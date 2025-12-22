@@ -65,11 +65,11 @@ const articleSchema = new mongoose.Schema({
             'meo-vat-xo-so',
             'phuong-phap-soi-cau',
             'huong-dan-choi',
-            // Category mới (game categories) - Đồng bộ với front-end
-            'lien-minh-huyen-thoai',
-            'lien-quan-mobile',
-            'dau-truong-chan-ly-tft',
-            'trending'
+            // Category mới (lottery categories) - Đồng bộ với front-end
+            'kinh-nghiem',
+            'soi-cau-lo-to',
+            'soi-cau-dac-biet',
+            'dan-de-bat-tu'
         ],
         index: true
     },
@@ -283,25 +283,25 @@ articleSchema.statics.getCategoryLabels = function () {
         'huong-dan-choi': 'Hướng Dẫn Chơi'
     };
 
-    // Category mới (game categories) - Đồng bộ với front-end
+    // Category mới (lottery categories) - Đồng bộ với front-end
     const newCategoryLabels = {
-        'lien-minh-huyen-thoai': 'Liên Minh Huyền Thoại',
-        'lien-quan-mobile': 'Liên Quân Mobile',
-        'dau-truong-chan-ly-tft': 'Đấu Trường Chân Lý TFT',
-        'trending': 'Trending'
+        'kinh-nghiem': 'Kinh Nghiệm',
+        'soi-cau-lo-to': 'Soi Cầu Lôtô',
+        'soi-cau-dac-biet': 'Soi Cầu Đặc Biệt',
+        'dan-de-bat-tu': 'Dàn Đề Bất Tử'
     };
 
     // Mapping từ category cũ sang category mới (đồng bộ với front-end)
     const categoryMapping = {
-        'du-doan-ket-qua-xo-so': 'lien-minh-huyen-thoai',
-        'dan-de-chuyen-nghiep': 'lien-minh-huyen-thoai',
-        'thong-ke-xo-so': 'lien-minh-huyen-thoai',
-        'giai-ma-giac-mo': 'lien-quan-mobile',
-        'tin-tuc-xo-so': 'lien-quan-mobile',
-        'kinh-nghiem-choi-lo-de': 'dau-truong-chan-ly-tft',
-        'meo-vat-xo-so': 'dau-truong-chan-ly-tft',
-        'phuong-phap-soi-cau': 'trending',
-        'huong-dan-choi': 'trending'
+        'du-doan-ket-qua-xo-so': 'soi-cau-dac-biet',
+        'dan-de-chuyen-nghiep': 'dan-de-bat-tu',
+        'thong-ke-xo-so': 'soi-cau-dac-biet',
+        'giai-ma-giac-mo': 'soi-cau-lo-to',
+        'tin-tuc-xo-so': 'soi-cau-dac-biet',
+        'kinh-nghiem-choi-lo-de': 'kinh-nghiem',
+        'meo-vat-xo-so': 'kinh-nghiem',
+        'phuong-phap-soi-cau': 'soi-cau-lo-to',
+        'huong-dan-choi': 'kinh-nghiem'
     };
 
     // Trả về cả category cũ và mới với label đúng
@@ -315,15 +315,15 @@ articleSchema.statics.getCategoryLabels = function () {
 // Helper function để map category cũ sang mới (đồng bộ với front-end)
 articleSchema.statics.mapOldCategoryToNew = function (category) {
     const mapping = {
-        'du-doan-ket-qua-xo-so': 'lien-minh-huyen-thoai',
-        'dan-de-chuyen-nghiep': 'lien-minh-huyen-thoai',
-        'thong-ke-xo-so': 'lien-minh-huyen-thoai',
-        'giai-ma-giac-mo': 'lien-quan-mobile',
-        'tin-tuc-xo-so': 'lien-quan-mobile',
-        'kinh-nghiem-choi-lo-de': 'dau-truong-chan-ly-tft',
-        'meo-vat-xo-so': 'dau-truong-chan-ly-tft',
-        'phuong-phap-soi-cau': 'trending',
-        'huong-dan-choi': 'trending'
+        'du-doan-ket-qua-xo-so': 'soi-cau-dac-biet',
+        'dan-de-chuyen-nghiep': 'dan-de-bat-tu',
+        'thong-ke-xo-so': 'soi-cau-dac-biet',
+        'giai-ma-giac-mo': 'soi-cau-lo-to',
+        'tin-tuc-xo-so': 'soi-cau-dac-biet',
+        'kinh-nghiem-choi-lo-de': 'kinh-nghiem',
+        'meo-vat-xo-so': 'kinh-nghiem',
+        'phuong-phap-soi-cau': 'soi-cau-lo-to',
+        'huong-dan-choi': 'kinh-nghiem'
     };
     return mapping[category] || category;
 };
@@ -332,10 +332,10 @@ articleSchema.statics.mapOldCategoryToNew = function (category) {
 articleSchema.statics.getCategoryLabel = function (category) {
     const mappedCategory = this.mapOldCategoryToNew(category);
     const labels = {
-        'lien-minh-huyen-thoai': 'Liên Minh Huyền Thoại',
-        'lien-quan-mobile': 'Liên Quân Mobile',
-        'dau-truong-chan-ly-tft': 'Đấu Trường Chân Lý TFT',
-        'trending': 'Trending'
+        'kinh-nghiem': 'Kinh Nghiệm',
+        'soi-cau-lo-to': 'Soi Cầu Lôtô',
+        'soi-cau-dac-biet': 'Soi Cầu Đặc Biệt',
+        'dan-de-bat-tu': 'Dàn Đề Bất Tử'
     };
     return labels[mappedCategory] || 'Tin Tức';
 };
