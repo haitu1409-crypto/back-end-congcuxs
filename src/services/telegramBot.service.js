@@ -1955,21 +1955,21 @@ function setupLotterySocketRealtime(bot) {
 }
 
 function setupDefaultSchedules(bot) {
-    // Setup schedule cho XSMB - chỉ schedule 1 lần lúc 18:35
-    const xsmbScheduleTime = parseTimeInput(DEFAULT_AUTO_SCHEDULE_TIME_XSMB);
-    if (!xsmbScheduleTime) {
-        console.warn('[TelegramBot] TELEGRAM_AUTO_SCHEDULE_TIME_XSMB không hợp lệ, bỏ qua auto schedule XSMB.');
-    } else if (autoScheduleChats.length) {
-        autoScheduleChats.forEach((chatIdRaw) => {
-            const chatId = chatIdRaw.trim();
-            if (!chatId) return;
-            
-            scheduleForChat({ bot, chatId, time: xsmbScheduleTime, type: 'xsmb' });
-            const hourStr = String(xsmbScheduleTime.hour).padStart(2, '0');
-            const minuteStr = String(xsmbScheduleTime.minute).padStart(2, '0');
-            console.log(`[TelegramBot] Auto schedule XSMB ${hourStr}:${minuteStr} cho chat ${chatId}`);
-        });
-    }
+    // ✅ ĐÃ TẮT: Setup schedule cho XSMB - tự động render ảnh bảng kết quả xổ số theo giờ cài đặt
+    // const xsmbScheduleTime = parseTimeInput(DEFAULT_AUTO_SCHEDULE_TIME_XSMB);
+    // if (!xsmbScheduleTime) {
+    //     console.warn('[TelegramBot] TELEGRAM_AUTO_SCHEDULE_TIME_XSMB không hợp lệ, bỏ qua auto schedule XSMB.');
+    // } else if (autoScheduleChats.length) {
+    //     autoScheduleChats.forEach((chatIdRaw) => {
+    //         const chatId = chatIdRaw.trim();
+    //         if (!chatId) return;
+    //         
+    //         scheduleForChat({ bot, chatId, time: xsmbScheduleTime, type: 'xsmb' });
+    //         const hourStr = String(xsmbScheduleTime.hour).padStart(2, '0');
+    //         const minuteStr = String(xsmbScheduleTime.minute).padStart(2, '0');
+    //         console.log(`[TelegramBot] Auto schedule XSMB ${hourStr}:${minuteStr} cho chat ${chatId}`);
+    //     });
+    // }
 
     // Setup schedule cho thông báo kết quả dự đoán
     const notificationTime = parseTimeInput(DEFAULT_AUTO_SCHEDULE_TIME_NOTIFICATION_RESULT);
