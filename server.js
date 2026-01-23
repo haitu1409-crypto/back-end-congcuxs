@@ -30,7 +30,6 @@ const ultraAdvancedSoiCauRoutes = require('./src/routes/ultraAdvancedSoiCau.rout
 const authRoutes = require('./src/routes/auth.routes');
 const chatRoutes = require('./src/routes/chat.routes');
 const adminRoutes = require('./src/routes/admin.routes');
-const initTelegramBot = require('./src/services/telegramBot.service');
 
 const database = require('./src/config/database');
 const xsmbScheduler = require('./src/services/xsmbScheduler.service');
@@ -285,32 +284,6 @@ app.use(compression({
 // Body parser middleware
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
-
-const telegramBot = initTelegramBot();
-if (telegramBot) {
-    const webhookSecret = process.env.TELEGRAM_WEBHOOK_SECRET || 'telegram-webhook';
-    const webhookPath = '/telegram/' + webhookSecret;
-    const publicWebhookUrl = process.env.TELEGRAM_WEBHOOK_URL;
-
-    if (publicWebhookUrl) {
-        console.log('[TelegramBot] Using webhook at ' + publicWebhookUrl + webhookPath);
-        app.use(webhookPath, telegramBot.webhookCallback(webhookPath));
-
-        telegramBot.telegram.setWebhook(publicWebhookUrl + webhookPath)
-            .then(() => console.log('[TelegramBot] Webhook registered successfully'))
-            .catch(error => console.error('[TelegramBot] Failed to set webhook:', error.message));
-    } else {
-        telegramBot.launch()
-            .then(() => console.log('[TelegramBot] Running in long-polling mode'))
-            .catch(error => console.error('[TelegramBot] Unable to start long-polling:', error.message));
-
-        process.once('SIGINT', () => telegramBot.stop('SIGINT'));
-        process.once('SIGTERM', () => telegramBot.stop('SIGTERM'));
-    }
-} else {
-    console.warn('[TelegramBot] Bot disabled (missing TELEGRAM_BOT_TOKEN).');
-}
-
 
 // Logging middleware
 if (process.env.NODE_ENV === 'development') {

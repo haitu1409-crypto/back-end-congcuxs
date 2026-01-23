@@ -198,11 +198,11 @@ function parseTimeFromString(timeStr = '') {
 
 /**
  * Lấy thời gian đóng đăng ký từ biến môi trường
- * Sử dụng TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP để xác định thời gian đóng đăng ký
+ * Sử dụng PREDICTION_SIGNUP_CUTOFF_TIME để xác định thời gian đóng đăng ký
  * Mặc định: 18:00
  */
 function getSignupCutoffTime() {
-    const signupTimeStr = process.env.TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP || '18:00';
+    const signupTimeStr = process.env.PREDICTION_SIGNUP_CUTOFF_TIME || '18:00';
     const parsed = parseTimeFromString(signupTimeStr);
     return parsed || { hour: 18, minute: 0 }; // Fallback về 18:00
 }
@@ -210,19 +210,19 @@ function getSignupCutoffTime() {
 /**
  * Xác định ngày dự đoán dựa trên giờ hiện tại
  * Logic:
- * - Trước thời gian đóng (từ TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP): đăng ký dự đoán cho hôm nay
+ * - Trước thời gian đóng (từ PREDICTION_SIGNUP_CUTOFF_TIME): đăng ký dự đoán cho hôm nay
  * - Từ thời gian đóng đến thời gian đóng + 35 phút: không cho đăng ký
  * - Sau thời gian đóng + 35 phút: đăng ký dự đoán cho ngày mai
  * 
  * Sử dụng biến môi trường:
- * - TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP: thời gian đóng đăng ký (mặc định: 18:00)
+ * - PREDICTION_SIGNUP_CUTOFF_TIME: thời gian đóng đăng ký (mặc định: 18:00)
  * 
- * Ví dụ với TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP=18:00:
+ * Ví dụ với PREDICTION_SIGNUP_CUTOFF_TIME=18:00:
  * - Trước 18:00: đăng ký cho hôm nay
  * - Từ 18:00-18:35: không cho đăng ký
  * - Sau 18:35: đăng ký cho ngày mai
  * 
- * Ví dụ với TELEGRAM_AUTO_SCHEDULE_TIME_SINGUP=18:30:
+ * Ví dụ với PREDICTION_SIGNUP_CUTOFF_TIME=18:30:
  * - Trước 18:30: đăng ký cho hôm nay
  * - Từ 18:30-19:05: không cho đăng ký
  * - Sau 19:05: đăng ký cho ngày mai

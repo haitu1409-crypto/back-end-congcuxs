@@ -1,5 +1,4 @@
 const GroupMemberActivity = require('../models/groupMemberActivity.model');
-const { upsertMember } = require('./telegramGroupMember.service');
 
 async function recordInteraction({ chatId, userId, username, displayName }) {
     if (!chatId || !userId) return;
@@ -23,18 +22,6 @@ async function recordInteraction({ chatId, userId, username, displayName }) {
         { $set: update },
         { upsert: true, new: true, setDefaultsOnInsert: true }
     );
-
-    try {
-        await upsertMember({
-            chatId,
-            userId,
-            username,
-            displayName,
-            lastSeenAt: new Date()
-        });
-    } catch (error) {
-        console.error('[GroupMemberActivity] Lỗi cập nhật profile thành viên:', error.message);
-    }
 }
 
 async function findInactiveMembers({
