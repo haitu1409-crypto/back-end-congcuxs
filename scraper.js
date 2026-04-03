@@ -2,7 +2,7 @@ const puppeteer = require('puppeteer');
 const mongoose = require('mongoose');
 const redis = require('redis');
 const pidusage = require('pidusage');
-const { connectMongoDB, isConnected } = require('./db');
+const { connectMongoDB, isConnected } = require('./src/config/database');
 require('dotenv').config();
 
 process.env.TZ = 'Asia/Ho_Chi_Minh';

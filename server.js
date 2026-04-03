@@ -40,6 +40,7 @@ const statsScheduler = require('./src/services/statsScheduler.service');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+app.set('trust proxy', 1);
 // Security middleware
 app.use(helmet({
     contentSecurityPolicy: false,
@@ -181,27 +182,27 @@ app.use(cors({
 app.options('*', (req, res) => {
     const origin = req.headers.origin;
     const normalizedOrigin = normalizeOrigin(origin);
-    
+
     // Check if origin is allowed
-    const isAllowed = !origin || 
+    const isAllowed = !origin ||
         normalizedAllowedOrigins.includes('*') ||
         normalizedAllowedOrigins.includes(normalizedOrigin) ||
         allowedOrigins.includes('*') ||
         allowedOrigins.includes(origin);
-    
+
     if (isAllowed && origin) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
     } else if (isAllowed) {
         res.setHeader('Access-Control-Allow-Origin', '*');
     }
-    
+
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS, PATCH');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin, Cache-Control, Access-Control-Request-Method, Access-Control-Request-Headers, x-user-id');
     res.setHeader('Access-Control-Max-Age', '86400');
-    
+
     console.log('🔄 OPTIONS preflight request from:', origin, isAllowed ? '✅ ALLOWED' : '❌ BLOCKED');
-    
+
     res.status(204).end();
 });
 
@@ -483,14 +484,14 @@ app.use('/uploads', (req, res, next) => {
     // Set CORS headers for static files
     const origin = req.headers.origin;
     const normalizedOrigin = normalizeOrigin(origin);
-    
+
     if (!origin) {
         // Allow requests with no origin (direct access)
         res.setHeader('Access-Control-Allow-Origin', '*');
-    } else if (normalizedAllowedOrigins.includes('*') || 
-               normalizedAllowedOrigins.includes(normalizedOrigin) ||
-               allowedOrigins.includes('*') || 
-               allowedOrigins.includes(origin)) {
+    } else if (normalizedAllowedOrigins.includes('*') ||
+        normalizedAllowedOrigins.includes(normalizedOrigin) ||
+        allowedOrigins.includes('*') ||
+        allowedOrigins.includes(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin);
         res.setHeader('Access-Control-Allow-Credentials', 'true');
     }
